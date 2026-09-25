@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { alsCsv, csvFeld } from './csv';
+import { alsCsv, csvFeld, csvText } from './csv';
 
 const zeile = {
 	datum: '2026-09-17',
@@ -68,5 +68,43 @@ describe('alsCsv', () => {
 	// Zeilenumbrueche als CRLF: das erwarten Excel und die CSV-Festlegung (RFC 4180).
 	it('trennt die Zeilen mit CRLF', () => {
 		expect(alsCsv([zeile])).toContain('\r\n');
+	});
+});
+
+/*
+ * Bewertung 25.09.2026: Ein Bontext, der mit =, +, -, @ oder einem Tabulator beginnt,
+ * wird von Tabellenprogrammen als Formel gelesen (CSV-Injection). Die Texte kommen aus
+ * der Texterkennung, also letztlich von der Kasse — aber was ein Programm beim Oeffnen
+ * AUSFUEHRT, darf nicht davon abhaengen, was jemand auf einen Bon drucken laesst.
+ */
+describe('csvText', () => {
+	it('entschaerft Texte, die ein Tabellenprogramm als Formel liest', () => {
+		expect(csvText('=HYPERLINK("http://x.example")')).toBe(`"'=HYPERLINK(""http://x.example"")"`);
+		expect(csvText('+49 30 1234')).toBe("'+49 30 1234");
+		expect(csvText('-Pfand')).toBe("'-Pfand");
+		expect(csvText('@SUMME(A1)')).toBe("'@SUMME(A1)");
+		expect(csvText('\tversteckt')).toBe("'\tversteckt");
+	});
+
+	it('laesst gewoehnliche Texte und null unveraendert', () => {
+		expect(csvText('BIO MILCH')).toBe('BIO MILCH');
+		expect(csvText('Milch = frisch')).toBe('Milch = frisch');
+		expect(csvText(null)).toBe('');
+	});
+
+	it('laesst reine Zahlen in Textspalten als Zahl stehen', () => {
+		expect(csvText('-1')).toBe('-1');
+		expect(csvText('0,512')).toBe('0,512');
+		expect(csvText('+2')).toBe('+2');
+	});
+
+	it('entschaerft im Export die Textspalten, nicht die Betraege', () => {
+		const spalten = alsCsv([{ ...zeile, rawText: '=1+1', totalPriceCents: -50, unitPriceCents: -50 }])
+			.split('\r\n')[1]
+			.split(';');
+		expect(spalten).toContain("'=1+1");
+		// Negative Betraege bleiben Zahlen — sonst rechnet die Tabelle mit Text.
+		expect(spalten).toContain('-0,50');
+		expect(spalten).not.toContain("'-0,50");
 	});
 });

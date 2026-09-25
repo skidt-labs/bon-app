@@ -80,5 +80,5 @@ Fertig: $REGISTRY/$ABBILD:$VERSION (und :latest)
 Noch NICHT geschehen — bewusst, das ist eine eigene Entscheidung:
   * compose.yaml zeigt weiterhin auf die Fassung, die dort eingetragen ist
   * die laufenden Container wurden nicht neu gestartet
-  * der Tag ist lokal; 'git push --tags', sobald es ein Remote gibt
+  * der Tag ist lokal; oeffentlich wird er mit scripts/veroeffentlichen.sh --push
 ENDE

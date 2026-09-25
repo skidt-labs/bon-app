@@ -351,3 +351,52 @@ describe('autoSyncMessage', () => {
 		expect(meldung).toMatch(/nicht angelaufen/);
 	});
 });
+
+/*
+ * Bewertung 25.09.2026: tx() meldete Erfolg, sobald die EINZELANFRAGE durch war — nicht,
+ * wenn die Transaktion abgeschlossen ist. Bricht sie danach noch ab (Speicher voll, ein
+ * Konflikt, der Browser raeumt auf), stand in der Oberflaeche „sicher gespeichert" fuer
+ * ein Foto, das es nicht gibt. Nachgestellt mit einer zweiten Anfrage, die an einem
+ * doppelten Schluessel scheitert und damit die ganze Transaktion verwirft.
+ */
+describe('tx', () => {
+	beforeEach(async () => {
+		await resetDb();
+		vi.resetModules();
+	});
+
+	it('meldet erst Erfolg, wenn die Transaktion wirklich abgeschlossen ist', async () => {
+		const { tx } = await import('./outbox');
+		await tx('readwrite', (store) => store.add({ id: 1, probe: 'erster' }));
+		await expect(
+			tx('readwrite', (store) => {
+				const gelingt = store.add({ id: 2, probe: 'zweiter' });
+				store.add({ id: 1, probe: 'doppelt' }); // ConstraintError → Abbruch
+				return gelingt;
+			})
+		).rejects.toBeTruthy();
+		// Der Abbruch hat auch den „gelungenen" Eintrag verworfen.
+		expect(await tx('readonly', (store) => store.count())).toBe(1);
+	});
+
+	it('liefert das Ergebnis der Anfrage, wenn alles abgeschlossen ist', async () => {
+		const { tx } = await import('./outbox');
+		expect(await tx('readwrite', (store) => store.add({ id: 7, probe: 'x' }))).toBe(7);
+	});
+
+	it('schliesst die Verbindung auch, wenn die Anfrage sofort wirft', async () => {
+		const { tx } = await import('./outbox');
+		await expect(
+			tx('readwrite', () => {
+				throw new Error('QuotaExceededError');
+			})
+		).rejects.toThrow('QuotaExceededError');
+		// Bliebe die Verbindung offen, meldete deleteDatabase „blocked" statt Erfolg.
+		const ausgang = await new Promise<string>((fertig) => {
+			const req = indexedDB.deleteDatabase('bon-outbox');
+			req.onsuccess = () => fertig('geloescht');
+			req.onblocked = () => fertig('blockiert');
+		});
+		expect(ausgang).toBe('geloescht');
+	});
+});

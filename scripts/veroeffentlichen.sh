@@ -57,7 +57,13 @@ fi
 
 STAND="$(git rev-parse --short HEAD)"
 VERSION="$(node -p "require('./package.json').version")"
-TAG="$(git describe --exact-match --tags HEAD 2>/dev/null || true)"
+# Der Versions-Tag: der juengste erreichbare, aber nur, wenn er zur Fassung in
+# package.json passt. Nach einem Release ist HEAD fast nie der getaggte Commit selbst,
+# sondern „Produktion auf Fassung …" dahinter; ein Test auf genau HEAD liesse jeden Tag
+# weg. Gesetzt wird er im oeffentlichen Repo nur einmal — beim ersten Schnappschuss
+# dieser Fassung.
+TAG="$(git describe --tags --abbrev=0 HEAD 2>/dev/null || true)"
+[ "$TAG" = "v$VERSION" ] || TAG=""
 
 ARBEIT="$(mktemp -d)"
 trap 'rm -rf "$ARBEIT"' EXIT
@@ -145,20 +151,25 @@ fi
 git -C "$KLON" diff --cached --stat | tail -25
 
 NACHRICHT="Stand $VERSION"
-[ -n "$TAG" ] && NACHRICHT="Fassung ${TAG#v}"
+# „Fassung …" nur beim ersten Schnappschuss dieser Fassung; danach bleibt es „Stand …".
+TAG_FEHLT=nein
+if [ -n "$TAG" ] && ! git -C "$KLON" ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+	TAG_FEHLT=ja
+	NACHRICHT="Fassung ${TAG#v}"
+fi
 
 if [ "$PUSH" != ja ]; then
 	echo
 	echo "Probelauf: nichts committet, nichts geschoben."
-	echo "Veröffentlichen mit:  $0 --push   (Nachricht: \"$NACHRICHT\"${TAG:+, Tag $TAG})"
+	echo "Veröffentlichen mit:  $0 --push   (Nachricht: \"$NACHRICHT\"$([ "$TAG_FEHLT" = ja ] && echo ", Tag $TAG"))"
 	git -C "$KLON" reset -q --hard "origin/$ZWEIG"
 	exit 0
 fi
 
 git -C "$KLON" commit -q -m "$NACHRICHT"
 git -C "$KLON" push -q origin "$ZWEIG"
-if [ -n "$TAG" ] && ! git -C "$KLON" rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+if [ "$TAG_FEHLT" = ja ]; then
 	git -C "$KLON" tag -a "$TAG" -m "Fassung ${TAG#v}"
 	git -C "$KLON" push -q origin "$TAG"
 fi
-echo "==> Veröffentlicht: $NACHRICHT ($(git -C "$KLON" rev-parse --short HEAD))${TAG:+, Tag $TAG}"
+echo "==> Veröffentlicht: $NACHRICHT ($(git -C "$KLON" rev-parse --short HEAD))$([ "$TAG_FEHLT" = ja ] && echo ", Tag $TAG")"

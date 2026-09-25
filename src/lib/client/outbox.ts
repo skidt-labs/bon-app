@@ -98,18 +98,34 @@ function openDb(): Promise<IDBDatabase> {
  * Schliessen sammelt eine lange laufende PWA-Seite eine offene Verbindung
  * pro Zugriff an.
  */
-function tx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
+export function tx<T>(mode: IDBTransactionMode, fn: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
 	return openDb().then(
 		(db) =>
 			new Promise<T>((resolve, reject) => {
-				const request = fn(db.transaction(STORE, mode).objectStore(STORE));
-				request.onsuccess = () => {
+				const transaktion = db.transaction(STORE, mode);
+				let request: IDBRequest<T>;
+				try {
+					request = fn(transaktion.objectStore(STORE));
+				} catch (err) {
+					// Wirft die Anfrage sofort (etwa QuotaExceededError beim add), kaeme weder
+					// oncomplete noch onabort an — und die Verbindung bliebe offen. Eine offene
+					// Verbindung blockiert jedes spaetere deleteDatabase und Versions-Upgrade.
+					db.close();
+					reject(err);
+					return;
+				}
+				// Erfolg erst bei `oncomplete`, nicht bei `request.onsuccess`: bis dahin kann
+				// die Transaktion noch abbrechen (Speicher voll, Konflikt), und dann ist auch
+				// die gelungene Einzelanfrage verworfen. Wer „sicher gespeichert" sagt, muss
+				// den Abschluss abwarten (Bewertung 25.09.2026). Ein Fehler der Anfrage
+				// selbst bricht die Transaktion ab und kommt ueber `onabort` hier an.
+				transaktion.oncomplete = () => {
 					db.close();
 					resolve(request.result);
 				};
-				request.onerror = () => {
+				transaktion.onabort = () => {
 					db.close();
-					reject(request.error);
+					reject(transaktion.error ?? request.error ?? new Error('IndexedDB-Transaktion abgebrochen'));
 				};
 			})
 	);

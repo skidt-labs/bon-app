@@ -109,14 +109,28 @@ export async function storeReceiptImage(
 		.resize({ width: MAX_WIDTH, height: MAX_HEIGHT, fit: 'inside', withoutEnlargement: true })
 		.webp({ quality: 82 })
 		.toBuffer({ resolveWithObject: true });
-	await writeFile(join(baseDir(), imagePath), original);
-
 	const thumb = await sharp(buf)
 		.rotate()
 		.resize({ width: THUMB_EDGE, height: THUMB_EDGE, fit: 'inside', withoutEnlargement: true })
 		.webp({ quality: 70 })
 		.toBuffer();
-	await writeFile(join(baseDir(), thumbPath), thumb);
+	const originalDatei = join(baseDir(), imagePath);
+	const thumbDatei = join(baseDir(), thumbPath);
+	try {
+		await writeFile(originalDatei, original);
+		await writeFile(thumbDatei, thumb);
+	} catch (err) {
+		// Auch ein teilweise geschriebenes Thumbnail darf keinen verwaisten Bon
+		// hinterlassen. Der urspruengliche Schreibfehler bleibt fuer den Aufrufer erhalten.
+		for (const datei of [originalDatei, thumbDatei]) {
+			try {
+				await rm(datei, { force: true });
+			} catch (cleanupErr) {
+				console.warn('[storage] Unvollstaendige Bilddatei liess sich nicht entfernen', { datei, err: cleanupErr });
+			}
+		}
+		throw err;
+	}
 
 	return { imagePath, thumbPath, width: info.width };
 }

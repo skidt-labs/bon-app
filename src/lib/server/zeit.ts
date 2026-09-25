@@ -59,6 +59,19 @@ export function parseBonZeit(iso: string | null | undefined): Date | null {
 
   // Ein Offset im String ist eindeutig — kein Grund, Europe/Berlin zu raten.
   if (OFFSET_RE.test(trimmed)) {
+    // Date normalisiert z. B. den 30. Februar still zum 2. Maerz. Der Kalendertag
+    // muss deshalb vor dem Parsen geprueft werden, auch wenn ein Offset vorliegt.
+    const datum = /^(\d{4})-(\d{2})-(\d{2})/.exec(trimmed);
+    if (datum) {
+      const jahr = Number(datum[1]);
+      const monat = Number(datum[2]);
+      const tag = Number(datum[3]);
+      const probe = new Date(0);
+      probe.setUTCFullYear(jahr, monat - 1, tag);
+      if (probe.getUTCFullYear() !== jahr || probe.getUTCMonth() !== monat - 1 || probe.getUTCDate() !== tag) {
+        return null;
+      }
+    }
     const withOffset = new Date(trimmed);
     return Number.isFinite(withOffset.getTime()) ? withOffset : null;
   }

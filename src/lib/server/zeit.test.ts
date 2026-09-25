@@ -32,6 +32,11 @@ describe('parseBonZeit', () => {
     expect(parseBonZeit('2026-03-16T18:16:00+02:00')?.toISOString()).toBe('2026-03-16T16:16:00.000Z');
   });
 
+  it('lehnt unmoegliche Kalendertage auch mit explizitem Offset ab', () => {
+    expect(parseBonZeit('2026-02-30T12:00:00Z')).toBeNull();
+    expect(parseBonZeit('2026-04-31T12:00:00+02:00')).toBeNull();
+  });
+
   it('gibt null zurueck fuer eine Wanduhrzeit in der Fruehjahrs-Umstellungsluecke', () => {
     process.env.TZ = 'UTC';
     // Nacht vom 28. auf den 29.03.2026: um 02:00 MEZ springt die Uhr auf 03:00 MESZ.

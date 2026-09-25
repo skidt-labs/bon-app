@@ -76,8 +76,12 @@ export const GET: RequestHandler = async ({ url, cookies }) => {
 		 * Konto und eine Sitzung, denn das Einloesen setzt beides voraus. Liegt das
 		 * Einladungs-Cookie vor, laeuft die Anlage also weiter — der eigene Haushalt ist
 		 * dann ohnehin nur eine Zwischenstation und wird beim Einloesen wieder entfernt.
+		 *
+		 * Gefragt wird der oben GEMERKTE Wert, nicht das Cookie: aufraeumen() hat es an
+		 * dieser Stelle schon geloescht. Bis 0.3.2 stand hier cookies.get(...) — und jeder
+		 * Eingeladene bekam bei abgeschalteter Selbstbedienung den 403 (Bewertung 25.09.).
 		 */
-		if (!(await selbstbedienungLesen()) && !cookies.get(EINLADUNG_TOKEN_COOKIE)) {
+		if (!(await selbstbedienungLesen()) && !einladungToken) {
 			error(
 				403,
 				'Für diese Instanz braucht es eine Einladung. Bitte wende dich an die Person, die sie betreibt.'

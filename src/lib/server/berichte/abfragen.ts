@@ -1,4 +1,4 @@
-import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
+import { and, asc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import type { db as Db } from '$lib/server/db';
 import {
@@ -199,6 +199,9 @@ export async function berichtLaden(db: typeof Db, k: Zugriffskontext, monat: str
 /**
  * Eine Zeile je Position, fuer den CSV-Export eines Monats — nur bestaetigte Bons, wie
  * im Bericht: was noch niemand geprueft hat, ist keine Zahl, mit der man rechnen sollte.
+ *
+ * `grenzen.bis` ist AUSSCHLIESSLICH (so liefert es monatsgrenzen): Bis 0.3.2 stand hier
+ * `<=`, und ein Bon um genau 00:00 Uhr am Ersten landete in zwei Monatsexporten.
  */
 export async function exportZeilenLaden(
 	db: typeof Db,
@@ -228,6 +231,6 @@ export async function exportZeilenLaden(
 		.leftJoin(merchants, eq(merchants.id, receipts.merchantId))
 		.leftJoin(categories, eq(categories.id, receiptItems.categoryId))
 		.leftJoin(ober, eq(ober.id, categories.parentId))
-		.where(and(sichtbareBons(k), eq(receipts.status, 'confirmed'), gte(wann, grenzen.von), lte(wann, grenzen.bis)))
+		.where(and(sichtbareBons(k), eq(receipts.status, 'confirmed'), gte(wann, grenzen.von), lt(wann, grenzen.bis)))
 		.orderBy(asc(wann), asc(receipts.id), asc(receiptItems.lineNo));
 }

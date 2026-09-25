@@ -22,7 +22,7 @@ services:
 
   bon-web:
     build: { context: ., target: runtime }
-    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.2
+    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.3
     container_name: bon-web
     restart: unless-stopped
     depends_on:
@@ -57,7 +57,7 @@ services:
 
   bon-worker:
     build: { context: ., target: runtime }
-    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.2
+    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.3
     container_name: bon-worker
     restart: unless-stopped
     depends_on:
@@ -134,7 +134,7 @@ services:
 
   bon-matrix:
     build: { context: ., target: runtime }
-    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.2
+    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.3
     container_name: bon-matrix
     restart: unless-stopped
     # M1 (Korrekturrunde 2): SHUTDOWN_KETTE_TIMEOUT_MS in src/matrix/client.ts wartet

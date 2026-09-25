@@ -66,7 +66,7 @@ describe('GET /receipts/[id]/image', () => {
 
 	it('meldet 404 (mit eigenem Text), wenn die DB-Zeile existiert, die Datei auf der Platte aber fehlt', async () => {
 		mocks.selectResult = [{ imagePath: '2026/09/x.webp' }];
-		mocks.readFile.mockRejectedValue(new Error('ENOENT'));
+		mocks.readFile.mockRejectedValue(Object.assign(new Error('Datei fehlt'), { code: 'ENOENT' }));
 		let caught: unknown;
 		try {
 			await GET(fakeEvent());
@@ -74,6 +74,12 @@ describe('GET /receipts/[id]/image', () => {
 			caught = err;
 		}
 		expect(isHttpError(caught, 404)).toBe(true);
+	});
+
+	it('meldet einen Dateisystemfehler als voruebergehenden Fehler statt als fehlendes Bild', async () => {
+		mocks.selectResult = [{ imagePath: '2026/09/x.webp' }];
+		mocks.readFile.mockRejectedValue(Object.assign(new Error('Zugriff verweigert'), { code: 'EACCES' }));
+		await expect(GET(fakeEvent())).rejects.toMatchObject({ status: 503 });
 	});
 
 	it('liefert das Bild als image/webp mit langer privater Cache-Lebensdauer', async () => {

@@ -15,12 +15,16 @@ export const GET: RequestHandler = async ({ params, locals }) => {
 	let buf: Buffer;
 	try {
 		buf = await readFile(receiptPathFor(row.imagePath));
-	} catch {
+	} catch (err) {
 		// Die DB-Zeile existiert, die Datei auf der Platte nicht (mehr) — z. B. nach
 		// einem Restore ohne die zugehörigen Bilddateien. Das ist ein Betriebsfehler,
 		// kein falscher Zugriff: 404 statt 500, aber mit eigenem Text, damit man beide
 		// Fälle im Log unterscheiden kann.
-		error(404, 'Bilddatei nicht auffindbar');
+		if (typeof err === 'object' && err !== null && 'code' in err && err.code === 'ENOENT') {
+			error(404, 'Bilddatei nicht auffindbar');
+		}
+		console.error('[receipts/image] Bilddatei nicht lesbar', err);
+		error(503, 'Bilddatei derzeit nicht lesbar');
 	}
 	return new Response(new Uint8Array(buf), {
 		headers: { 'content-type': 'image/webp', 'cache-control': 'private, max-age=31536000' }

@@ -46,6 +46,21 @@ export function csvFeld(wert: string | number | null): string {
 	return `"${s.replace(/"/g, '""')}"`;
 }
 
+/**
+ * Ein TEXTfeld, zusaetzlich gegen Formeln abgesichert: beginnt es mit =, +, -, @,
+ * Tabulator oder Wagenruecklauf, liest ein Tabellenprogramm es als Formel und fuehrt sie
+ * beim Oeffnen aus. Ein vorangestelltes Hochkomma macht daraus sichtbaren Text.
+ *
+ * Nur fuer Textspalten — ein Betrag wie „-0,50" muss eine Zahl bleiben, mit der die
+ * Tabelle rechnen kann. Aus demselben Grund bleibt auch in einer Textspalte eine reine
+ * Zahl („-1" als Menge beim Pfand) unangetastet: sie ist keine Formel.
+ */
+export function csvText(wert: string | null): string {
+	if (wert === null) return '';
+	const reineZahl = /^[+-]?\d+(?:[.,]\d+)?$/.test(wert);
+	return csvFeld(!reineZahl && /^[=+\-@\t\r]/.test(wert) ? `'${wert}` : wert);
+}
+
 /** Cent als deutsche Dezimalzahl: 109 → „1,09", −50 → „−0,50" (mit normalem Minus). */
 function alsBetrag(cents: number): string {
 	return (cents / 100).toFixed(2).replace('.', ',');
@@ -54,25 +69,23 @@ function alsBetrag(cents: number): string {
 export function alsCsv(zeilen: CsvZeile[]): string {
 	const reihen = zeilen.map((z) =>
 		[
-			z.datum,
-			z.haendler,
-			z.lineNo,
-			z.rawText,
-			ART_TEXT[z.lineType as LineType] ?? z.lineType,
-			z.quantity,
-			z.unit,
-			z.unitPriceCents === null ? null : alsBetrag(z.unitPriceCents),
-			alsBetrag(z.totalPriceCents),
+			csvFeld(z.datum),
+			csvText(z.haendler),
+			csvFeld(z.lineNo),
+			csvText(z.rawText),
+			csvFeld(ART_TEXT[z.lineType as LineType] ?? z.lineType),
+			csvText(z.quantity),
+			csvText(z.unit),
+			csvFeld(z.unitPriceCents === null ? null : alsBetrag(z.unitPriceCents)),
+			csvFeld(alsBetrag(z.totalPriceCents)),
 			// Der Betrag ZUSAETZLICH in ganzen Cent: wer nur die Dezimalspalte hat,
 			// addiert Gleitkommazahlen — genau die Fehlerquelle, die dieses Projekt an
 			// jeder anderen Stelle vermeidet.
-			z.totalPriceCents,
-			z.kategorie,
-			z.oberkategorie,
-			z.bonId
-		]
-			.map(csvFeld)
-			.join(';')
+			csvFeld(z.totalPriceCents),
+			csvText(z.kategorie),
+			csvText(z.oberkategorie),
+			csvFeld(z.bonId)
+		].join(';')
 	);
 	return [KOPF.join(';'), ...reihen].join('\r\n');
 }
