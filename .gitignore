@@ -32,3 +32,6 @@ tests/fixtures/receipts/*
 
 # Secrets
 /secrets/
+
+# Veroeffentlichen: Sperrliste, Ziel und Klon des oeffentlichen Repos (scripts/veroeffentlichen.sh)
+/.veroeffentlichen/

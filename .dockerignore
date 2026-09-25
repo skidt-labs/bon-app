@@ -15,3 +15,5 @@ secrets
 tests/fixtures/receipts/*
 !tests/fixtures/receipts/*.expected.json
 !tests/fixtures/receipts/README.md
+.veroeffentlichen
+docs
