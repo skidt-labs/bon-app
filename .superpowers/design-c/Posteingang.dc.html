@@ -1,0 +1,94 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #1f548a; }
+    a:hover { color: #163d66; }
+  </style>
+</helmet>
+
+<div style="width: 390px; height: 844px; display: flex; flex-direction: column; background: #f6f8fa; font-family: 'Manrope', system-ui, sans-serif; color: #111a3b; overflow: hidden;">
+
+  <div style="flex-shrink: 0; padding: 22px 20px 16px;">
+    <div style="font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8a93a6;">Bon-App</div>
+    <div style="font-size: 27px; font-weight: 800; letter-spacing: -0.02em; margin-top: 3px;">Posteingang</div>
+    <div style="font-size: 13px; color: #5a6478; margin-top: 3px;">3 warten auf dich · 1 bestätigt</div>
+  </div>
+
+  <div style="flex: 1; overflow: hidden; padding: 0 20px; display: flex; flex-direction: column; gap: 10px;">
+
+    <!-- braucht Prüfung, mit Hinweisen als DAUERHAFTER Text -->
+    <a href="#" style="display: block; border-radius: 14px; background: #ffffff; padding: 15px 16px; text-decoration: none; color: inherit; box-shadow: inset 4px 0 0 #07aeb7;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+        <span style="font-size: 17px; font-weight: 700;">Lidl</span>
+        <span style="font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums;">23,39&nbsp;€</span>
+      </div>
+      <div style="font-size: 13px; color: #5a6478; margin-top: 3px;">heute, 18:42 · 14 Positionen</div>
+      <div style="display: flex; align-items: flex-start; gap: 7px; margin-top: 9px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#a86a11" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+        <span style="font-size: 13px; color: #8a5610; line-height: 1.4;">Eine Position ohne Namen · Summe weicht um 0,20&nbsp;€ ab</span>
+      </div>
+    </a>
+
+    <a href="#" style="display: block; border-radius: 14px; background: #ffffff; padding: 15px 16px; text-decoration: none; color: inherit; box-shadow: inset 4px 0 0 #07aeb7;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+        <span style="font-size: 17px; font-weight: 700;">Aldi Süd</span>
+        <span style="font-size: 18px; font-weight: 700; font-variant-numeric: tabular-nums;">8,74&nbsp;€</span>
+      </div>
+      <div style="font-size: 13px; color: #5a6478; margin-top: 3px;">gestern, 11:05 · 6 Positionen</div>
+    </a>
+
+    <!-- wird gerade ausgelesen -->
+    <div style="border-radius: 14px; background: #ffffff; padding: 15px 16px; opacity: 0.86;">
+      <div style="display: flex; align-items: center; gap: 10px;">
+        <span style="display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #07aeb7;"></span>
+        <span style="flex: 1; font-size: 16px; font-weight: 600; color: #5a6478;">wird ausgelesen …</span>
+        <span style="font-size: 13px; color: #8a93a6;">vor 4 Sek.</span>
+      </div>
+    </div>
+
+    <!-- fehlgeschlagen: sichtbar, nicht versteckt -->
+    <a href="#" style="display: block; border-radius: 14px; background: #ffffff; padding: 15px 16px; text-decoration: none; color: inherit; box-shadow: inset 4px 0 0 #c2553f;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+        <span style="font-size: 17px; font-weight: 700;">Unbekannter Händler</span>
+        <span style="font-size: 15px; color: #8a93a6;">—</span>
+      </div>
+      <div style="font-size: 13px; color: #5a6478; margin-top: 3px;">heute, 09:12 · über Matrix</div>
+      <div style="display: flex; align-items: flex-start; gap: 7px; margin-top: 9px;">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#c2553f" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink: 0; margin-top: 1px;"><path d="M12 9v4"/><path d="M12 17h.01"/><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>
+        <span style="font-size: 13px; color: #a33b2a; line-height: 1.4;">Auslesen fehlgeschlagen. Das Bild ist gespeichert — tippen für einen neuen Versuch.</span>
+      </div>
+    </a>
+
+    <!-- erledigt -->
+    <a href="#" style="display: block; border-radius: 14px; background: #eef2f6; padding: 14px 16px; text-decoration: none; color: inherit;">
+      <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+        <span style="display: flex; align-items: center; gap: 7px;">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#07889a" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="m4 12.5 5 5L20 6.5"/></svg>
+          <span style="font-size: 16px; font-weight: 600; color: #5a6478;">Lidl</span>
+        </span>
+        <span style="font-size: 16px; font-weight: 600; color: #5a6478; font-variant-numeric: tabular-nums;">13,61&nbsp;€</span>
+      </div>
+      <div style="font-size: 13px; color: #8a93a6; margin-top: 3px;">heute, 08:24 · bestätigt</div>
+    </a>
+  </div>
+
+  <div style="flex-shrink: 0; padding: 14px 20px 20px;">
+    <button style="width: 100%; height: 56px; border: none; border-radius: 14px; background: #1f548a; color: #ffffff; font-family: 'Manrope', sans-serif; font-size: 17px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 10px;">
+      <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3.5"/></svg>
+      Bon scannen
+    </button>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

@@ -1,0 +1,17 @@
+node_modules
+build
+.svelte-kit
+data
+.env
+.git
+secrets
+.env.*
+!.env.example
+# Nur *.webp auszuschliessen reichte nicht: der Testbon liegt als .png vor, und
+# .gitignore haelt dieses Verzeichnis komplett draussen (ausser *.expected.json und
+# README). Der Build-Kontext hatte diese Regel nicht — ein echtes Bonbild waere ueber
+# `COPY . .` in die Build-Schicht gewandert. Echte Bons enthalten Kaufhistorie,
+# Uhrzeit, Laden und Kartendaten.
+tests/fixtures/receipts/*
+!tests/fixtures/receipts/*.expected.json
+!tests/fixtures/receipts/README.md

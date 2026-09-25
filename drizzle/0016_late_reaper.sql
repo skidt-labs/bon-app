@@ -1,0 +1,1 @@
+ALTER TABLE "budgets" ADD COLUMN "geloescht_ab" date;

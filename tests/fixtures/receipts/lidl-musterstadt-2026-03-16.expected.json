@@ -1,0 +1,33 @@
+{
+  "_herkunft": "Lidl Musterstadt, 16.03.2026, 104,31 EUR. Screenshot aus der Lidl-App (gut lesbar, kein Foto).",
+  "_geprueft": "Von Hand gegen das Bild abgeglichen: Positionen summieren sich exakt auf 104,31; MwSt-Block A 7% 23,83 + B 19% 80,48 = 104,31.",
+  "_deckt_ab": "Gewichtsware (Zeile 1), drei Mehrfachmengen (6/10/17), Rabatt mit Bezug (13 -> 12), Leergut negativ (18), beide MwSt-Klassen",
+  "merchantName": "Lidl",
+  "purchasedAt": "2026-03-16T18:16:00",
+  "totalGrossCents": 10431,
+  "currency": "EUR",
+  "vatSummary": [
+    { "rate": 7, "netCents": 2227, "taxCents": 156, "grossCents": 2383 },
+    { "rate": 19, "netCents": 6763, "taxCents": 1285, "grossCents": 8048 }
+  ],
+  "items": [
+    { "lineNo": 1,  "rawText": "Tomaten Strauch",      "lineType": "article",        "unitPriceCents": 299,  "totalPriceCents": 429,  "vatClass": "A" },
+    { "lineNo": 2,  "rawText": "Paprika rot, spitz",   "lineType": "article",        "unitPriceCents": 219,  "totalPriceCents": 219,  "vatClass": "A" },
+    { "lineNo": 3,  "rawText": "Mini Romana",          "lineType": "article",        "unitPriceCents": 99,   "totalPriceCents": 99,   "vatClass": "A" },
+    { "lineNo": 4,  "rawText": "Zuckermais",           "lineType": "article",        "unitPriceCents": 299,  "totalPriceCents": 299,  "vatClass": "A" },
+    { "lineNo": 5,  "rawText": "Bio Rote Beete 500g",  "lineType": "article",        "unitPriceCents": 199,  "totalPriceCents": 199,  "vatClass": "A" },
+    { "lineNo": 6,  "rawText": "Bio Gurken",           "lineType": "article",        "unitPriceCents": 119,  "totalPriceCents": 238,  "vatClass": "A" },
+    { "lineNo": 7,  "rawText": "Zwiebeln rot",         "lineType": "article",        "unitPriceCents": 149,  "totalPriceCents": 149,  "vatClass": "A" },
+    { "lineNo": 8,  "rawText": "Knoblauch",            "lineType": "article",        "unitPriceCents": 89,   "totalPriceCents": 89,   "vatClass": "A" },
+    { "lineNo": 9,  "rawText": "Zwiebelzopf",          "lineType": "article",        "unitPriceCents": 369,  "totalPriceCents": 369,  "vatClass": "A" },
+    { "lineNo": 10, "rawText": "Dinkelmehl Type 630",  "lineType": "article",        "unitPriceCents": 109,  "totalPriceCents": 218,  "vatClass": "A" },
+    { "lineNo": 11, "rawText": "Orangensaft XXL",      "lineType": "article",        "unitPriceCents": 299,  "totalPriceCents": 299,  "vatClass": "B" },
+    { "lineNo": 12, "rawText": "VeganeSchoko.Caramel", "lineType": "article",        "unitPriceCents": 85,   "totalPriceCents": 85,   "vatClass": "A" },
+    { "lineNo": 13, "rawText": "Preisvorteil",         "lineType": "discount",       "unitPriceCents": null, "totalPriceCents": -10,  "vatClass": null, "appliesToLine": 12 },
+    { "lineNo": 14, "rawText": "Ariel Flüssig Reg.",   "lineType": "article",        "unitPriceCents": 1699, "totalPriceCents": 1699, "vatClass": "B" },
+    { "lineNo": 15, "rawText": "Soft & Dry Wind",      "lineType": "article",        "unitPriceCents": 1075, "totalPriceCents": 1075, "vatClass": "B" },
+    { "lineNo": 16, "rawText": "KnotenbeutelO&G",      "lineType": "article",        "unitPriceCents": 2,    "totalPriceCents": 2,    "vatClass": "B" },
+    { "lineNo": 17, "rawText": "Wandfarbe-0495166",    "lineType": "article",        "unitPriceCents": 2499, "totalPriceCents": 4998, "vatClass": "B" },
+    { "lineNo": 18, "rawText": "Pfandrückgabe",        "lineType": "deposit_return", "unitPriceCents": null, "totalPriceCents": -25,  "vatClass": "B" }
+  ]
+}

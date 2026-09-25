@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+  <style>
+    body { margin: 0; }
+    a { color: #1f548a; }
+    a:hover { color: #163d66; }
+  </style>
+</helmet>
+
+<div style="width: 390px; height: 844px; display: flex; flex-direction: column; background: #f6f8fa; font-family: 'Manrope', system-ui, sans-serif; color: #111a3b; overflow: hidden;">
+
+  <!-- Kopf -->
+  <div style="flex-shrink: 0; background: #ffffff; padding: 14px 20px 12px;">
+    <div style="font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8a93a6; margin-bottom: 4px;">Bon prüfen</div>
+    <div style="display: flex; align-items: baseline; justify-content: space-between; gap: 12px;">
+      <span style="font-size: 25px; font-weight: 800; letter-spacing: -0.02em;">Lidl</span>
+      <span style="font-size: 25px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums;">23,39&nbsp;€</span>
+    </div>
+    <div style="font-size: 13px; color: #5a6478; margin-top: 2px;">15.09.2026, 18:42 · 14 Positionen</div>
+  </div>
+
+  <!-- Bon-Foto mit Sprung-Zoom -->
+  <div style="flex-shrink: 0; height: 150px; margin: 0 20px 14px; border-radius: 14px; background: #e8edf2; position: relative; overflow: hidden;">
+    <div style="position: absolute; inset: 0; background: repeating-linear-gradient(180deg, #fdfcfa 0px, #fdfcfa 13px, #f0eee9 13px, #f0eee9 14px);"></div>
+    <div style="position: absolute; left: 50%; top: 46%; transform: translate(-50%,-50%); width: 226px; display: flex; flex-direction: column; gap: 6px; font-size: 10px; font-variant-numeric: tabular-nums; color: #6b6355;">
+      <div style="display: flex; justify-content: space-between;"><span>BUTTER 250G</span><span>2,49</span></div>
+      <div style="display: flex; justify-content: space-between; background: #07aeb7; color: #ffffff; font-weight: 700; padding: 3px 6px; margin: 0 -6px; border-radius: 4px;"><span>BIO MILCH 1L</span><span>1,29</span></div>
+      <div style="display: flex; justify-content: space-between;"><span>TOMATEN 500G</span><span>1,99</span></div>
+    </div>
+    <div style="position: absolute; right: 10px; bottom: 9px; background: rgba(17,26,59,0.78); color: #ffffff; font-size: 10px; font-weight: 600; padding: 3px 8px; border-radius: 20px;">Zeile 2</div>
+  </div>
+
+  <!-- Braucht dich: gross und ausgeschrieben -->
+  <div style="flex-shrink: 0; margin: 0 20px 14px; border-radius: 14px; background: #fdf4e3; padding: 15px;">
+    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 10px;">
+      <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="#a86a11" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v4"/><path d="M12 16h.01"/></svg>
+      <span style="font-size: 15px; font-weight: 700; color: #8a5610;">Eine Zeile braucht dich</span>
+    </div>
+    <div style="font-size: 14px; color: #6b5227; line-height: 1.45; margin-bottom: 13px;">Zu dieser Position wurde kein Name gefunden. Preis und Art stimmen vermutlich.</div>
+    <div style="display: flex; gap: 10px;">
+      <button style="flex: 1; height: 48px; border: none; border-radius: 11px; background: #ffffff; font-family: 'Manrope', sans-serif; font-size: 15px; font-weight: 600; text-align: left; padding: 0 15px; color: #111a3b;">Artikel</button>
+      <input value="2,49" style="width: 108px; height: 48px; border: none; border-radius: 11px; padding: 0 15px; text-align: right; font-family: 'Manrope', sans-serif; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; background: #ffffff; color: #111a3b;">
+    </div>
+  </div>
+
+  <!-- Alle Positionen: kompakt, tippen klappt gross auf -->
+  <div style="flex: 1; overflow: hidden; padding: 0 20px;">
+    <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px;">
+      <span style="font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #8a93a6;">Alle 14 Positionen</span>
+      <span style="font-size: 12px; color: #8a93a6;">tippen zum Öffnen</span>
+    </div>
+
+    <div style="display: flex; flex-direction: column; gap: 5px;">
+      <!-- kompakte Zeile -->
+      <div style="display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 15px; border-radius: 11px; background: #ffffff;">
+        <span style="flex: 1; font-size: 15px;">Butter 250g</span>
+        <span style="font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums;">2,49</span>
+      </div>
+
+      <!-- die angetippte Zeile: gross, mit Feldern -->
+      <div style="border-radius: 12px; background: #ffffff; box-shadow: 0 0 0 2px #07aeb7; padding: 12px 15px;">
+        <div style="display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 11px;">
+          <span style="font-size: 16px; font-weight: 700;">Bio Milch 1l</span>
+          <span style="font-size: 11px; font-weight: 600; color: #07889a; background: #e0f6f8; padding: 3px 9px; border-radius: 20px;">im Foto</span>
+        </div>
+        <div style="display: flex; gap: 10px;">
+          <button style="flex: 1; height: 46px; border: 1px solid #dde3ea; border-radius: 10px; background: #ffffff; font-family: 'Manrope', sans-serif; font-size: 15px; font-weight: 500; text-align: left; padding: 0 14px; color: #111a3b;">Artikel</button>
+          <input value="1,29" style="width: 104px; height: 46px; border: 1px solid #dde3ea; border-radius: 10px; padding: 0 14px; text-align: right; font-family: 'Manrope', sans-serif; font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; color: #111a3b;">
+        </div>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 15px; border-radius: 11px; background: #ffffff;">
+        <span style="flex: 1; font-size: 15px;">Tomaten 500g</span>
+        <span style="font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums;">1,99</span>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 15px; border-radius: 11px; background: #ffffff;">
+        <span style="flex: 1; font-size: 15px; color: #5a6478;">Pfand</span>
+        <span style="font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; color: #5a6478;">0,25</span>
+      </div>
+
+      <div style="display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 15px; border-radius: 11px; background: #ffffff;">
+        <span style="flex: 1; font-size: 15px; color: #5a6478;">Rabatt 10% · auf Zeile 3</span>
+        <span style="font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; color: #a33b2a;">−0,20</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Bestätigen, immer erreichbar -->
+  <div style="flex-shrink: 0; padding: 12px 20px 20px; background: linear-gradient(180deg, rgba(246,248,250,0) 0%, #f6f8fa 22%);">
+    <button style="width: 100%; height: 56px; border: none; border-radius: 14px; background: #1f548a; color: #ffffff; font-family: 'Manrope', sans-serif; font-size: 17px; font-weight: 700;">Bon bestätigen</button>
+  </div>
+
+</div>
+</x-dc>
+</body>
+</html>

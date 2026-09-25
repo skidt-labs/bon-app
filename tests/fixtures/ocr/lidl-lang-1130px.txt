@@ -1,0 +1,89 @@
+Beispielstr. 3-5
+54321Beispielheim
+EUR
+Mango 1,49 x 3 4,47 A
+Lidl Plus Rabatt -0,45
+Bio Kiwi Gold 3,79 x 2 7,58 A
+0liv.-Mix ohne Stein 1,79 A
+Lidl Plus Rabatt -0,18
+Gr.0liv.Zitr.Kräuter 1,79 A
+Lidl Plus Rabatt -0,18
+Rügenw. Veg. Würstch 3,29 A
+Preisvorteil -1,07
+Rügenw. Veg. Bratw. 3,29 A
+Preisvorteil -1,07
+Speisequark 40% 1,58x 2 3,16 A
+Frischkäse Sahnige 1,59 A
+Creme Fraiche XXL 09,99x 2 1,98 A
+Snap Pizza o. Sauce 1,99x 2 3,98 A
+Jogh. & Schokoballs 0,45 A
+Eisbergsalat-Mix 0,95 A
+Preisvorteil -0,06
+Dr.Oetker Pud.-Vani. 0,99 A
+Erythritol 3,65 A
+Dr.Oetker Bourb. Va. 1,29x 2 2,58 A
+Baguette Brötch. 4er 0,69 x 4 2,76 A
+Lidl Plus Rabatt -0,28
+Pfandrückgabe -1,00 B
+-4 x 0,25
+zu zahlen 40 , 01
+Kreditkarte 40 , 01
+MWST% MWST + Netto = Brutto
+A 7% 2,68 38,33 41,01
+B 19 % -0,16 -0,84 -1,00
+Summe 2,52 37,49 40 , 01
+1 Gesamter Preisvorteil !
+1 3,29 EUR gespart l
+! Mit Lidl Plus i
+f 1,99 EUR gespart l
+TSE Transaktionsnummer: 012345
+Seriennr. Kasse: ABC-345-6789-0
+Seriennr. TSE: AbcdEFghijKLm3/4pQrstU1W3Yz
+ab/CDE1G345K78NO=
+Prüfwert: ABCDeFGHIJkLMnop67StUv23yzabCDEF
+gHiJ6L890Pq3StUVwx+Y1ABcDEfGh0J2LmNOpQ9stuVW
+x6zabc+deFGHijklMNOPQ5stUvwXy+zABcDEfGHIJK
+LMN+8P0rsTUv
+Signaturzähler: 012345
+2020-01-01T00:00:00.000Z
+2020-01-01T00:00:30.000Z
+0246 913579/01 05.08.26 19:21
+UST-ID-NR:DE813388987
+Outletverkauf
+Giesen-Hasede, Hannoversche Str. 82
+Mi., 29.07. - Fr., 31.07.
+19 - 18 Uhr
+K-U-N-D-E-N-B-E-L-E-G
+Bezahlung MasterCard
+Betrag 40,01 EUR
+05.08.2026 19:20 T-ID 01234567
+TA-Nr. 012345 Beleg-Nr. 0123
+Kartennr. HHHHHHHH#HS 166 00
+Kontaktlos Chip Online
+VU-Nummer 012345678901
+Autorisierungsnummer 012345
+Autorisierungsantwortcode 00
+EMV-Daten: A0000000041010/00
+*& Zahlung erfolgt **
+K
+K
+VIELEN DANK FÜR DEINEN EINKAUF!
+K
+Kostenlose Servicenummer:
+0800 5435 7587
+www.lidl.de
+Eingelöste Coupons
+© 10%
+Chef Select Oliven
+© 10%
+Mango
+© 10%
+Grafschafter Baguette Brötchen
+Erhaltene Punkte
+£) +42 Lidl Punkte
+Die Punkte verfallen am 04.08.2028
+Einkauf getätigt in
+Beispielheim
+Ackerstr. 3 - 5
+54321 Beispielheim
+Details zur Filiale >

@@ -1,0 +1,11 @@
+-- Bestandsuebernahme: alle vorhandenen Bons sind geteilt.
+--
+-- Die Spalte hat die Vorgabe 'privat', weil das fuer NEUE Bons richtig ist (siehe
+-- Kommentar in schema.ts: erst das Bestaetigen teilt). Fuer den Bestand waere sie falsch:
+-- diese Bons sind heute fuer den ganzen Haushalt sichtbar, und eine Migration, die sie
+-- ueber Nacht privat macht, waere eine Ueberraschung — Berichte und Budgetstaende wuerden
+-- sich ohne Zutun aendern.
+--
+-- Darum ausdruecklich UPDATE statt sich auf die Vorgabe zu verlassen: der Bestand behaelt,
+-- was heute gilt, und nur was ab jetzt aufgenommen wird, faellt unter die neue Regel.
+UPDATE receipts SET sichtbarkeit = 'geteilt';

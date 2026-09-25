@@ -1,0 +1,54 @@
+L$DL
+Muster Weg 3
+12345VMusterstadt
+EUR
+Bioland Broccoli 2,29 A
+Scamorza-Käse weiss 3,49 A
+Bergader Bavaria blu 1,79 A
+Zu zahlen 7,57
+Kreditkarte 7,57
+MWST% MWST + Netto = Brutto
+A7% 0,50 7,07 7,57
+Summe 0,50 7,07 7,57
+TSE Transaktionsnummer: 012345
+Seriennr. Kasse: ABC-345-6789-01
+Seriennr. TSE: A/BCDEf6h8JK/L2NoPqrSTu12XyZ
+6b8DefghIJK7mnop=
+Prüfwert: +AbCDEFg7iJKLmnopQrstuvWx4ZAbc9@
+ABab/ /Cc@dDeE+fFg0hGi1HIj2kJlmKL3Mno+NOPQp
+QRsTUVWxyZabCDef456JKLMnOpq56tUvWXyZaBcDE9
+GHIJKLmN8pQR
+Signaturzähler: 012345
+2020-01-01T00:00:00.000Z
+2020-01-01T00:00:30.000Z
+0813 570246/81 26.08.26 14:56
+UST-ID-NR:DE813388987
+Outletverkauf
+Giesen-Hasede, Hannoversche Str. 82
+Mi., 2.9. - Fr., 4.9.
+10 - 18 Uhr
+K-U-N-D-E-N-B-E-L-E-G
+Bezahlung VISA
+Betrag 7,57 EUR
+26.08.2026 14:54 T-ID 01234567
+TA-Nr. 012345 Beleg-Nr. 0123
+Rqrstuvw. ST UV45 67
+Visa kontaktlos Chip Online
+Bestätigt durch mobiles Kundengerät
+VU-Nummer 012345678901
+Autorisierungsnummer 012345
+Autorisierungsantwortcode 00
+EMV-Daten: A0000000031010/00
+*k Zahlung erfolgt x
+VIELEN DANK FÜR DEINEN EINKAUF!
+Kostenlose Servicenummer:
+0800 5435 7587
+www.lidl.de
+Erhaltene Punkte
+@ +10 Lidl Punkte
+Die Punkte verfallen am 25.08.2028
+Einkauf getätigt in
+Mvsterstadt
+Muster Weg 3
+12345 Musterstadt
+Details zur Filiale }

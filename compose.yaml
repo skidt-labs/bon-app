@@ -1,0 +1,188 @@
+services:
+  bon-db:
+    image: postgres:18-alpine
+    container_name: bon-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bon
+      POSTGRES_USER: bon
+      POSTGRES_PASSWORD_FILE: /run/secrets/db-password
+      TZ: Europe/Berlin
+    volumes:
+      - bon_pgdata:/var/lib/postgresql
+      - ./secrets/db-password:/run/secrets/db-password:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bon -d bon"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [bon-intern]
+    ports:
+      - "127.0.0.1:55432:5432"   # nur lokal, für drizzle-kit vom Host
+
+  bon-web:
+    build: { context: ., target: runtime }
+    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.2
+    container_name: bon-web
+    restart: unless-stopped
+    depends_on:
+      bon-db: { condition: service_healthy }
+    environment:
+      ROLE: web
+      NODE_ENV: production
+      TZ: Europe/Berlin
+      PORT: "3000"
+      # Passwort NICHT in der Umgebung: `docker inspect` zeigt sie jedem, der an den
+      # Docker-Socket kommt. Zusammengebaut wird zur Laufzeit aus der Datei (url.ts).
+      DATABASE_URL_TEMPLATE: postgres://bon:__PW__@bon-db:5432/bon
+      DB_PASSWORD_FILE: /run/secrets/db-password
+      # adapter-node lehnt Request-Bodies sonst schon bei 512K ab (eigener Default),
+      # lange bevor der 12-MB-Check in +server.ts greift. Etwas Spielraum über den
+      # 12 MB Bild-Limit für multipart-Rahmen (Boundary, "source"-Feld, Header).
+      BODY_SIZE_LIMIT: "13M"
+    env_file: [.env]
+    volumes:
+      - ./secrets/db-password:/run/secrets/db-password:ro
+      - ./data/receipts:/app/data/receipts
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.bon.entrypoints: websecure
+      traefik.http.routers.bon.rule: Host(`${BON_HOST:?BON_HOST in .env setzen}`)
+      traefik.http.routers.bon.middlewares: default@file
+      traefik.http.routers.bon.tls: "true"
+      traefik.http.routers.bon.tls.certresolver: http_resolver
+      traefik.http.services.bon.loadbalancer.server.port: "3000"
+      traefik.docker.network: proxy
+    networks: [proxy, bon-intern]
+
+  bon-worker:
+    build: { context: ., target: runtime }
+    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.2
+    container_name: bon-worker
+    restart: unless-stopped
+    depends_on:
+      bon-db: { condition: service_healthy }
+    environment:
+      ROLE: worker
+      NODE_ENV: production
+      TZ: Europe/Berlin
+      # Passwort NICHT in der Umgebung: `docker inspect` zeigt sie jedem, der an den
+      # Docker-Socket kommt. Zusammengebaut wird zur Laufzeit aus der Datei (url.ts).
+      DATABASE_URL_TEMPLATE: postgres://bon:__PW__@bon-db:5432/bon
+      DB_PASSWORD_FILE: /run/secrets/db-password
+    env_file: [.env]
+    volumes:
+      - ./secrets/db-password:/run/secrets/db-password:ro
+      - ./data/receipts:/app/data/receipts
+    networks: [bon-intern]
+
+  # Etappe 3 der PaddleOCR-Anbindung. Zweite, messbare OCR-Engine neben Tesseract —
+  # NICHT als Ersatz: Tesseract bleibt die Voreinstellung, umgeschaltet wird ueber
+  # OCR_PROVIDER in .env. Ohne diese Variable laeuft der Dienst zwar mit, wird aber
+  # von niemandem gefragt.
+  #
+  # Kein Traefik-Label, kein veroeffentlichter Port, nur bon-intern: das Bonbild geht
+  # von bon-worker ueber die private Bruecke an den Dienst und verlaesst den Server
+  # nicht — dieselbe Zusage wie beim Tesseract-Weg.
+  #
+  # Bewusst KEIN depends_on beim Worker: die Engine ist optional, und ein harter
+  # Startzwang liesse die ganze App bei jedem Start auf einen Container warten, den
+  # sie vielleicht gar nicht benutzt. Der Rennfall nach einem Host-Neustart ist
+  # stattdessen im Code geloest — ein nicht erreichbarer Dienst gilt als
+  # VORUEBERGEHENDER Fehler (src/lib/server/ocr/paddle.ts), der Bon bleibt in der
+  # Warteschlange statt als gescheitert markiert zu werden.
+  bon-paddleocr:
+    build: { context: ./paddleocr }
+    image: bon-paddleocr:dev
+    container_name: bon-paddleocr
+    restart: unless-stopped
+    # Am AUSLEGUNGSFALL bemessen, nicht am Bestand: `storage/images.ts` legt einen Bon
+    # hoechstens 1600 px breit und 8000 px hoch ab, so gross darf also jeder kuenftige
+    # Bon werden. Genau dieses Bild am 2026-09-16 durch den Dienst geschickt: 2,6 GB
+    # anonym, rund 19 s, 214 Erkennungen — und zwar unabhaengig von der Kachelhoehe
+    # (600/800/1000 px ergaben 2690/2623/2643 MB). Die BREITE treibt den Verbrauch,
+    # die Kachel nimmt ihm nur das Wachstum mit der LAENGE.
+    #
+    # Zwei Deckel sind vorher gerissen, beide gemessen und nicht befuerchtet:
+    # 2g ohne Kachelung (der erste echte Bon, 838x5164, brauchte 5,9 GB) und 2g mit
+    # 1600-px-Kacheln (der 1130 px breite Bon, 1705 MB anon plus 214 MB Dateiseiten).
+    #
+    # 4g gibt dem Auslegungsfall rund ein Drittel Luft. Es ist ein Deckel, keine
+    # Reservierung: im Leerlauf belegt der Dienst rund 550 MB, und der Host hat 7 GB
+    # frei. Der Deckel steht da, damit ein entgleister Lauf nicht Traefik, Synapse und
+    # mailcow mit unter Druck setzt.
+    mem_limit: 4g
+    volumes:
+      # Auflage 3: ohne Cache laedt der Dienst die Modelle bei JEDEM Start neu
+      # (74 s gemessen, mit Cache 0,9 s).
+      - bon_paddleocr_models:/root/.paddleocr
+    healthcheck:
+      # Auflage 3: gesund heisst "hat ein Probebild gelesen", nicht "der Prozess
+      # laeuft". Ein Dienst, der antwortet und bei jedem Bon nichts findet, ist der
+      # teuerste Zustand von allen — er sieht gesund aus und liefert lautlos leere
+      # Ergebnisse. /health gibt 503 zurueck, solange die Probe nicht bestanden ist.
+      # python3 statt curl: im Paddle-Abbild liegt kein curl.
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Modelle laden und Probebild lesen dauert beim ersten Start mit leerem Cache
+      # rund 90 s. start_period laesst dem Dienst diese Zeit, ohne ihn als ungesund
+      # zu melden.
+      start_period: 180s
+    networks: [bon-intern]
+
+  bon-matrix:
+    build: { context: ., target: runtime }
+    image: ${BON_REGISTRY:?BON_REGISTRY in .env setzen}/bon-app:0.3.2
+    container_name: bon-matrix
+    restart: unless-stopped
+    # M1 (Korrekturrunde 2): SHUTDOWN_KETTE_TIMEOUT_MS in src/matrix/client.ts wartet
+    # bis zu 20s auf die Verarbeitungskette, bevor der Bot beendet. Ohne dieses Feld
+    # schickt Docker nach seinen eigenen 10s SIGKILL — die 20-Sekunden-Zusage aus
+    # Ruling K2b (Korrekturrunde 1) war damit faktisch auf die Hälfte begrenzt. 30s
+    # lässt die vollen 20s zu, plus Marge für den Rest des Shutdown-Handlers selbst.
+    stop_grace_period: 30s
+    depends_on:
+      bon-db: { condition: service_healthy }
+    # W2c (Korrekturrunde 2): harter Speicherdeckel gegen den Hebel aus W2 (Medium
+    # wird komplett gepuffert, bevor Kopplung/Grösse geprüft sind — W2a/W2b schliessen
+    # den ehrlichen Fall, dies hier ist der Deckel gegen eine gelogene Grösse). 512m
+    # orientiert sich an guest-synapse in matrix/compose.yaml (ebenfalls 512m für
+    # einen ganzen Homeserver) und lässt für den Bot selbst reichlich Luft: Node +
+    # matrix-bot-sdk + die native Rust-Kryptobindung liegen im Leerlauf grob bei
+    # 100-150 MB, dazu ein 25-MB-Bild im Speicher UND zwei sequenzielle
+    # sharp-Durchläufe (Original + Vorschaubild, storeReceiptImage in images.ts) on
+    # top. 512m lässt das bequem zu, deckelt aber ein böswillig übergrosses Medium so,
+    # dass Docker den Container neu startet, statt dass er den Host (15 GB RAM, auch
+    # Traefik/Synapse/mailcow) unter Druck setzt.
+    mem_limit: 512m
+    environment:
+      ROLE: matrix
+      NODE_ENV: production
+      TZ: Europe/Berlin
+      # Passwort NICHT in der Umgebung: `docker inspect` zeigt sie jedem, der an den
+      # Docker-Socket kommt. Zusammengebaut wird zur Laufzeit aus der Datei (url.ts).
+      DATABASE_URL_TEMPLATE: postgres://bon:__PW__@bon-db:5432/bon
+      DB_PASSWORD_FILE: /run/secrets/db-password
+      MATRIX_CRYPTO_DIR: /app/data/matrix-crypto
+    env_file: [.env]
+    volumes:
+      - ./secrets/db-password:/run/secrets/db-password:ro
+      - ./data/receipts:/app/data/receipts
+      - bon_matrix_crypto:/app/data/matrix-crypto
+    networks: [bon-intern, proxy]
+
+networks:
+  bon-intern:
+    name: bon-intern
+  proxy:
+    external: true
+
+volumes:
+  bon_pgdata:
+    external: true
+  bon_matrix_crypto:
+    external: true
+  bon_paddleocr_models:
+    external: true

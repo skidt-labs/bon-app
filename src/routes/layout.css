@@ -1,0 +1,33 @@
+@import 'tailwindcss';
+
+/*
+ * Die Farben der App, einmal benannt. Die Werte sind die, die bis zum 2026-09-17 als
+ * Literale (`bg-[#f6f8fa]`) in jeder Seite standen — hier wird nichts umgefaerbt, nur
+ * benannt. Tailwind 4 macht aus jedem `--color-*` eine Klasse (`bg-flaeche`, `text-tinte`)
+ * UND eine CSS-Variable (`var(--color-flaeche)`), sodass Komponenten beides nutzen koennen.
+ *
+ * Ein Dunkelmodus ist damit spaeter eine Frage dieser Variablen, nicht der Seiten — er ist
+ * ausdruecklich NICHT Teil der Oberflaechen-Umstellung (Entwurf, Abschnitt 1).
+ */
+@theme {
+	--font-sans: Manrope, system-ui, sans-serif;
+
+	--color-flaeche: #f6f8fa;           /* Seitenhintergrund */
+	--color-papier: #ffffff;            /* Karten, Tabellen, Leisten */
+	--color-tinte: #111a3b;             /* Text */
+	--color-gedaempft: #5a6478;         /* Nebentext */
+	--color-leise: #8a93a6;             /* Beschriftungen, Platzhalter */
+	--color-linie: #e6eaf0;             /* Trennlinien, Rahmen */
+	--color-linie-hell: #dde3ea;        /* Rahmen auf Weiss (Galerie-Knopf) */
+	--color-tuerkis: #07aeb7;           /* Akzent, Hauptknoepfe */
+	--color-tuerkis-dunkel: #07889a;    /* Akzent als Text */
+	--color-tuerkis-flaeche: #e3f4f5;   /* Akzent als Flaeche (Status-Chip Pruefen) */
+	--color-rot: #c2553f;               /* Fehler als Flaeche/Strich */
+	--color-rot-dunkel: #a33b2a;        /* Fehler als Text */
+	--color-rot-flaeche: #fbe9e5;       /* Fehler als Flaeche (Status-Chip Fehlgeschlagen) */
+	--color-bernstein-flaeche: #fdf4e3; /* Hinweis-Karten */
+	--color-bernstein: #8a5610;         /* Hinweis als Text */
+	--color-bernstein-strich: #a86a11;  /* Hinweis-Symbole */
+	--color-chip: #eef2f6;              /* Chips, inaktive Flaechen */
+	--color-marine: #1f548a;            /* Kamera-Knopf, Login */
+}

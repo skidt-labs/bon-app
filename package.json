@@ -1,0 +1,50 @@
+{
+	"name": "bon-app",
+	"private": true,
+	"license": "AGPL-3.0-or-later",
+	"version": "0.3.2",
+	"type": "module",
+	"scripts": {
+		"dev": "vite dev",
+		"build": "vite build && npm run build:worker && npm run build:matrix",
+		"build:worker": "esbuild src/worker/index.ts --bundle --platform=node --format=esm --packages=external --alias:\\$lib=./src/lib --outfile=build/worker.js",
+		"build:matrix": "esbuild src/matrix/index.ts --bundle --platform=node --format=esm --packages=external --alias:\\$lib=./src/lib --outfile=build/matrix.js",
+		"preview": "vite preview",
+		"prepare": "svelte-kit sync || echo ''",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "vitest run",
+		"test:golden": "RUN_GOLDEN=1 vitest run src/lib/server/extraction/golden.test.ts",
+		"test:mlx": "RUN_MLX_TESTS=1 vitest run src/lib/server/extraction/ocr-text-provider.mlx.test.ts",
+		"db:generate": "drizzle-kit generate",
+		"db:migrate": "drizzle-kit migrate"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-node": "^5.5.7",
+		"@sveltejs/kit": "^2.63.0",
+		"@sveltejs/vite-plugin-svelte": "^7.1.2",
+		"@tailwindcss/vite": "^4.3.0",
+		"@types/pg": "^8.23.1",
+		"@vite-pwa/sveltekit": "^1.1.0",
+		"@vitest/coverage-v8": "^5.0.0",
+		"drizzle-kit": "^0.31.10",
+		"esbuild": "^0.28.2",
+		"fake-indexeddb": "^6.2.5",
+		"svelte": "^5.56.1",
+		"svelte-check": "^4.6.0",
+		"tailwindcss": "^4.3.0",
+		"typescript": "^6.0.3",
+		"vite": "^8.0.16",
+		"vitest": "^5.0.0"
+	},
+	"dependencies": {
+		"@matrix-org/matrix-sdk-crypto-nodejs": "^0.4.0",
+		"drizzle-orm": "^0.45.2",
+		"matrix-bot-sdk": "^0.8.0",
+		"openid-client": "^6.8.8",
+		"pg": "^8.23.0",
+		"pg-boss": "^12.31.1",
+		"sharp": "^0.35.4",
+		"zod": "^4.6.5"
+	}
+}

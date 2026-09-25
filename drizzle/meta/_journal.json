@@ -1,0 +1,216 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789373342943,
+      "tag": "0000_organic_scream",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789375604502,
+      "tag": "0001_chief_spencer_smythe",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789376039166,
+      "tag": "0002_abnormal_invaders",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789384678675,
+      "tag": "0003_lying_scarecrow",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789384678676,
+      "tag": "0004_fix_applies_to_line_fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1789394597302,
+      "tag": "0005_wet_ares",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1789395057153,
+      "tag": "0006_lean_sersi",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789415812521,
+      "tag": "0007_cold_triathlon",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1789464500735,
+      "tag": "0008_mute_timeslip",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1789466135575,
+      "tag": "0009_product_aliases_null_merchant_unique",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1789466135576,
+      "tag": "0010_categories_two_level_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1789466135577,
+      "tag": "0011_kategoriebaum",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1789482517889,
+      "tag": "0012_tearful_mikhail_rasputin",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1789543866788,
+      "tag": "0013_cooing_la_nuit",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1789631808566,
+      "tag": "0014_round_secret_warriors",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1789646234875,
+      "tag": "0015_military_chat",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1789647463583,
+      "tag": "0016_late_reaper",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1789715894857,
+      "tag": "0017_lumpy_genesis",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1789715902773,
+      "tag": "0018_mitglieder_backfill",
+      "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1789722076216,
+      "tag": "0019_majestic_fabian_cortez",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1789731044395,
+      "tag": "0020_mighty_sphinx",
+      "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1789731050614,
+      "tag": "0021_bestand_geteilt",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1789733465858,
+      "tag": "0022_daffy_thor_girl",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1789733490820,
+      "tag": "0023_budget_kategorien_eigentuemer",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1789735206106,
+      "tag": "0024_short_umar",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1789745288366,
+      "tag": "0025_faithful_quentin_quire",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1789752193607,
+      "tag": "0026_broad_omega_red",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1790144588330,
+      "tag": "0027_doppelbons",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1790144595371,
+      "tag": "0028_doppelbons_markieren",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1790193191910,
+      "tag": "0029_ki_anbieter",
+      "breakpoints": true
+    }
+  ]
+}

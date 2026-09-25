@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="text-scale" content="scale" />
+
+		<!-- PWA: Manifest + Homescreen-Icons. @vite-pwa/sveltekit hat für SvelteKit
+		     kein index.html zum Transformieren, deshalb wird hier von Hand verlinkt
+		     statt es dem Plugin zu überlassen. -->
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<meta name="theme-color" content="#111111" />
+
+		<!-- iOS liest weder das Manifest-Icon noch "display: standalone" zuverlässig
+		     fürs Homescreen-Icon bzw. den App-Modus - dafür braucht es diese
+		     Apple-eigenen Tags. Das Zielgerät ist ein iPhone. -->
+		<link rel="apple-touch-icon" href="/icon-192.png" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+		<meta name="apple-mobile-web-app-title" content="Bons" />
+
+		%sveltekit.head%
+	</head>
+	<body data-sveltekit-preload-data="hover">
+		<div style="display: contents">%sveltekit.body%</div>
+		<script>
+			// Bewusst kein `virtual:pwa-register`-Import: app.html läuft nicht durch
+			// Vites Modulauflösung (keine index.html zum Transformieren bei SvelteKit),
+			// ein bare-specifier-Import würde im Browser scheitern. Der generierte
+			// Service Worker trägt dank registerType "autoUpdate" bereits
+			// skipWaiting/clientsClaim in sich - eine einfache Registrierung reicht.
+			if ('serviceWorker' in navigator) {
+				window.addEventListener('load', () => {
+					navigator.serviceWorker.register('/sw.js');
+				});
+			}
+		</script>
+	</body>
+</html>

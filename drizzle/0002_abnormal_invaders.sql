@@ -1,0 +1,3 @@
+ALTER TABLE "extraction_runs" ADD COLUMN "cost_micro_euros" integer;--> statement-breakpoint
+ALTER TABLE "extraction_runs" ADD COLUMN "accuracy_vs_confirmed" integer;--> statement-breakpoint
+ALTER TABLE "receipt_items" ADD CONSTRAINT "receipt_items_applies_to_line_fk" FOREIGN KEY ("receipt_id","applies_to_line") REFERENCES "public"."receipt_items"("receipt_id","line_no") ON DELETE set null ON UPDATE no action;
