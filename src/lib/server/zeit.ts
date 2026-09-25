@@ -1,3 +1,5 @@
+import { istTag, tagPlus } from '$lib/berichte/kalender';
+
 // Formatter einmal angelegt statt pro Aufruf: liest die Wanduhrzeit einer gegebenen
 // UTC-Instanz in Europe/Berlin aus (Jahr/Monat/Tag/Stunde/Minute/Sekunde als Zahlen).
 const berlinParts = new Intl.DateTimeFormat('en-US', {
@@ -209,4 +211,34 @@ export function naechsterMonat(monat: string): string | null {
 	return nr === 12
 		? `${jahr + 1}-01`
 		: `${jahr}-${String(nr + 1).padStart(2, '0')}`;
+}
+
+/**
+ * Anfang (einschliesslich) und Ende (AUSSCHLIESSLICH) einer Tagesspanne in `zone`;
+ * `bis` ist der letzte Tag, der noch dazugehoert. `null` fuer alles, was keine gueltige
+ * Spanne ist — der Aufrufer entscheidet, was er stattdessen zeigt.
+ */
+export function tagesgrenzen(von: string, bis: string, zone = 'Europe/Berlin'): { von: Date; bis: Date } | null {
+	if (!istTag(von) || !istTag(bis) || von > bis) return null;
+	const [vj, vm, vt] = von.split('-').map(Number);
+	const [nj, nm, nt] = tagPlus(bis, 1).split('-').map(Number);
+	return { von: mitternachtIn(zone, vj, vm, vt), bis: mitternachtIn(zone, nj, nm, nt) };
+}
+
+/** Anfang (einschliesslich) und Ende (ausschliesslich) eines Kalenderjahres in `zone`. */
+export function jahresgrenzen(jahr: number, zone = 'Europe/Berlin'): { von: Date; bis: Date } | null {
+	if (!Number.isInteger(jahr)) return null;
+	return { von: mitternachtIn(zone, jahr, 1, 1), bis: mitternachtIn(zone, jahr + 1, 1, 1) };
+}
+
+/** Der heutige Kalendertag als 'YYYY-MM-DD' in `zone`. */
+export function heutigerTag(jetzt: Date = new Date(), zone = 'Europe/Berlin'): string {
+	const teile = new Intl.DateTimeFormat('en-US', {
+		timeZone: zone,
+		year: 'numeric',
+		month: '2-digit',
+		day: '2-digit'
+	}).formatToParts(jetzt);
+	const t = Object.fromEntries(teile.map((p) => [p.type, p.value]));
+	return `${t.year}-${t.month}-${t.day}`;
 }

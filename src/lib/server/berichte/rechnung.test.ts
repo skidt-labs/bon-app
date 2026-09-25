@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { kennzahlen, nachKategorie, nachHaendler, verlauf, budgetstand, direkteCentsJeKategorie } from './rechnung';
+import {
+	nachKategorie, nachHaendler, budgetstand, direkteCentsJeKategorie, passendePositionen,
+	kategorienAufloesen, summeJeBon, vergleichMit, verlaufRechnen, budgetImJahr
+} from './rechnung';
 
 const KATEGORIEN = [
 	{ id: 'lm', name: 'Lebensmittel', parentId: null },
@@ -11,34 +14,6 @@ const KATEGORIEN = [
 
 const z = (categoryId: string | null, cents: number, lineType = 'article') =>
 	({ categoryId, totalPriceCents: cents, lineType }) as const;
-
-describe('kennzahlen', () => {
-	it('zaehlt Summe, Bons und Schnitt', () => {
-		const k = kennzahlen([{ cents: 2000 }, { cents: 1000 }], []);
-		expect(k.summe).toBe(3000);
-		expect(k.bons).toBe(2);
-		expect(k.schnitt).toBe(1500);
-	});
-
-	// Kein Vormonat mit Daten heisst „kein Vergleich", nicht „0 Prozent" — dieselbe
-	// Haltung wie in monatszahlen.ts (Etappe 3b).
-	it('gibt ohne Vormonat keinen Vergleich vor', () => {
-		const k = kennzahlen([{ cents: 2000 }], []);
-		expect(k.vormonatCents).toBeNull();
-		expect(k.veraenderungProzent).toBeNull();
-	});
-
-	it('rechnet die Veraenderung zum Vormonat', () => {
-		const k = kennzahlen([{ cents: 1200 }], [{ cents: 1000 }]);
-		expect(k.vormonatCents).toBe(1000);
-		expect(k.veraenderungProzent).toBe(20);
-	});
-
-	it('bleibt bei einem leeren Monat bei null, ohne durch null zu teilen', () => {
-		const k = kennzahlen([], []);
-		expect(k).toMatchObject({ summe: 0, bons: 0, schnitt: 0, vormonatCents: null, veraenderungProzent: null });
-	});
-});
 
 describe('nachKategorie', () => {
 	it('fasst die Unterkategorien unter ihrer Oberkategorie zusammen', () => {
@@ -112,19 +87,16 @@ describe('nachHaendler', () => {
 		const h = nachHaendler([{ haendler: null, cents: 700 }]);
 		expect(h[0].name).toBe('Unbekannter Händler');
 	});
-});
 
-describe('verlauf', () => {
-	it('liefert jeden angefragten Monat, auch die leeren', () => {
-		const v = verlauf([{ monat: '2026-08', cents: 500 }, { monat: '2026-08', cents: 500 }], [
-			'2026-07',
-			'2026-08',
-			'2026-09'
+	it('haelt Haendler mit Id auseinander und traegt die Id mit', () => {
+		const h = nachHaendler([
+			{ haendlerId: 'm1', haendler: 'Lidl', cents: 1000 },
+			{ haendlerId: 'm1', haendler: 'Lidl', cents: 500 },
+			{ haendlerId: null, haendler: 'Lidl', cents: 200 }
 		]);
-		expect(v).toEqual([
-			{ monat: '2026-07', cents: 0 },
-			{ monat: '2026-08', cents: 1000 },
-			{ monat: '2026-09', cents: 0 }
+		expect(h).toEqual([
+			{ id: 'm1', name: 'Lidl', cents: 1500, anteil: 1500 / 1700 },
+			{ id: null, name: 'Lidl', cents: 200, anteil: 200 / 1700 }
 		]);
 	});
 });
@@ -247,3 +219,95 @@ describe('direkteCentsJeKategorie', () => {
 	});
 });
 
+const P = (receiptId: string, categoryId: string | null, cents: number, lineType = 'article') =>
+	({ receiptId, categoryId, totalPriceCents: cents, lineType }) as const;
+
+describe('passendePositionen', () => {
+	it('nimmt Geldzeilen der gewaehlten Kategorien, keine Infozeilen', () => {
+		const zeilen = [P('b1', 'brot', 300), P('b1', 'brot', 0, 'info'), P('b1', 'obst', 200), P('b2', null, 100)];
+		expect(passendePositionen(zeilen, new Set(['brot']))).toEqual([P('b1', 'brot', 300)]);
+	});
+
+	// Rabatt und Pfand tragen ihr Vorzeichen und zaehlen in IHRER Kategorie. Ein Obst-Rabatt,
+	// der per applies_to_line am Brot haengt, macht das Brot nicht billiger.
+	it('zaehlt eine Rabattzeile nur, wenn sie selbst die Kategorie traegt', () => {
+		const zeilen = [P('b1', 'brot', 300), P('b1', 'brot', -50, 'discount'), P('b1', 'obst', -30, 'discount')];
+		expect(passendePositionen(zeilen, new Set(['brot'])).map((z) => z.totalPriceCents)).toEqual([300, -50]);
+	});
+});
+
+describe('kategorienAufloesen', () => {
+	const MIT_SLUG = [
+		{ id: 'lm', slug: 'lebensmittel', parentId: null },
+		{ id: 'brot', slug: 'brot', parentId: 'lm' },
+		{ id: 'obst', slug: 'obst', parentId: 'lm' },
+		{ id: 'haus', slug: 'haushalt', parentId: null }
+	];
+
+	it('schliesst bei einer Oberkategorie die Kinder ein', () => {
+		expect(kategorienAufloesen(['lebensmittel'], MIT_SLUG)).toEqual({ ids: new Set(['lm', 'brot', 'obst']), unbekannt: [] });
+		expect(kategorienAufloesen(['obst'], MIT_SLUG)).toEqual({ ids: new Set(['obst']), unbekannt: [] });
+	});
+
+	it('meldet Unbekanntes getrennt', () => {
+		expect(kategorienAufloesen(['gibtsnicht', 'haushalt'], MIT_SLUG)).toEqual({ ids: new Set(['haus']), unbekannt: ['gibtsnicht'] });
+		expect(kategorienAufloesen([], MIT_SLUG)).toEqual({ ids: new Set(), unbekannt: [] });
+	});
+});
+
+describe('summeJeBon', () => {
+	it('summiert je Bon nur Geldzeilen', () => {
+		const m = summeJeBon([P('b1', 'brot', 300), P('b1', 'brot', -50, 'discount'), P('b1', 'brot', 999, 'info'), P('b2', 'obst', 200)]);
+		expect([...m.entries()]).toEqual([['b1', 250], ['b2', 200]]);
+	});
+});
+
+describe('vergleichMit', () => {
+	it('rechnet die Veraenderung in ganzen Prozent', () => {
+		expect(vergleichMit(1200, 'August 2026', [600, 400])).toEqual({ bezeichnung: 'August 2026', cents: 1000, prozent: 20 });
+		expect(vergleichMit(900, 'August 2026', [1000])).toEqual({ bezeichnung: 'August 2026', cents: 1000, prozent: -10 });
+	});
+
+	it('gibt null statt 0 %, wenn im Vergleichszeitraum nichts liegt', () => {
+		expect(vergleichMit(1200, 'August 2026', [])).toEqual({ bezeichnung: 'August 2026', cents: null, prozent: null });
+	});
+
+	it('gibt keinen Prozentwert gegen eine Summe von 0', () => {
+		expect(vergleichMit(1200, 'August 2026', [0])).toEqual({ bezeichnung: 'August 2026', cents: 0, prozent: null });
+	});
+});
+
+describe('verlaufRechnen', () => {
+	const achse = [
+		{ monat: '2026-08', offen: false },
+		{ monat: '2026-09', offen: false },
+		{ monat: '2026-10', offen: true }
+	];
+
+	it('liefert jeden Achsenmonat, auch leere, und offene ohne Betrag', () => {
+		expect(verlaufRechnen([{ monat: '2026-09', cents: 500 }, { monat: '2026-09', cents: 300 }], achse, false)).toEqual([
+			{ monat: '2026-08', cents: 0, offen: false, vorjahrCents: null },
+			{ monat: '2026-09', cents: 800, offen: false, vorjahrCents: null },
+			{ monat: '2026-10', cents: 0, offen: true, vorjahrCents: null }
+		]);
+	});
+
+	it('traegt den Vorjahreswert nur, wo im Vorjahresmonat Bons lagen', () => {
+		const v = verlaufRechnen([{ monat: '2025-09', cents: 700 }, { monat: '2026-09', cents: 800 }], achse, true);
+		expect(v.map((x) => x.vorjahrCents)).toEqual([null, 700, null]);
+	});
+});
+
+describe('budgetImJahr', () => {
+	const stand = (budgetId: string, anteil: number | null) => ({
+		budgetId, name: budgetId === 't1' ? 'Lebensmittel' : 'Freizeit', betragCents: anteil === null ? null : 1000,
+		ausgabeCents: anteil === null ? 0 : anteil * 1000, anteil
+	});
+
+	it('zaehlt je Topf die Monate im Rahmen und die Monate mit Betrag', () => {
+		expect(budgetImJahr([[stand('t1', 0.8), stand('t2', null)], [stand('t1', 1.2), stand('t2', 0.5)], [stand('t1', 1)]])).toEqual([
+			{ budgetId: 't1', name: 'Lebensmittel', monateImRahmen: 2, monateMitBetrag: 3 },
+			{ budgetId: 't2', name: 'Freizeit', monateImRahmen: 1, monateMitBetrag: 1 }
+		]);
+	});
+});
