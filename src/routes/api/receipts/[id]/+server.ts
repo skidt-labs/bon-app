@@ -6,6 +6,7 @@ import {
 	pruefeKorrekturen,
 	korrekturenAnwenden,
 	lernenNachtragen,
+	originalBeimEintragen,
 	KorrekturVerfehlt,
 	type Gelerntes
 } from '$lib/server/receipts/korrekturen';
@@ -29,14 +30,25 @@ export const PUT: RequestHandler = async ({ params, request, locals }) => {
 	// geprueft in den Auswertungen. Verhindern soll die Sperre eine DOPPELTE
 	// Bestaetigung, nicht die spaetere Korrektur; deshalb bleibt sie in confirm/ eng
 	// und ist hier weit.
-	if (receipt.status !== 'review' && receipt.status !== 'confirmed') {
-		error(409, 'Dieser Bon ist noch nicht ausgelesen und kann darum nicht geändert werden.');
+	//
+	// Ein FEHLGESCHLAGENER Bon darf ebenfalls hinein: das Bild ist da, nur das Auslesen
+	// ging schief, und dann traegt ihn eben ein Mensch ein (27.09.2026). Beim Speichern
+	// wird er zu einem Bon in Pruefung (korrekturenAnwenden).
+	if (receipt.status !== 'review' && receipt.status !== 'confirmed' && receipt.status !== 'failed') {
+		error(
+			409,
+			receipt.status === 'doppelt'
+				? 'Dieser Bon ist als doppelt verworfen und kann darum nicht geändert werden.'
+				: 'Dieser Bon wird gerade ausgelesen und kann darum nicht geändert werden.'
+		);
 	}
 
 	const geparst = korrekturenSchema.safeParse(await request.json());
 	if (!geparst.success) error(400, 'Ungültige Korrekturen');
 	const geprueft = pruefeKorrekturen(geparst.data);
 	if (!geprueft.ok) error(400, geprueft.grund);
+
+	const doppelVon = await originalBeimEintragen(receipt, geparst.data);
 
 	let gelernt: Gelerntes[] = [];
 	try {
@@ -47,7 +59,9 @@ export const PUT: RequestHandler = async ({ params, request, locals }) => {
 				// Nur ein bereits bestaetigter Bon laesst hier die Sichtbarkeit aendern.
 				// Bei einem ungeprueften bliebe sie ohnehin 'privat' — er wird erst beim
 				// Bestaetigen geteilt.
-				warBestaetigt: receipt.status === 'confirmed'
+				warBestaetigt: receipt.status === 'confirmed',
+				ausStatus: receipt.status,
+				doppelVon
 			})
 		);
 	} catch (err) {

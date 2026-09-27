@@ -229,3 +229,62 @@ describe('pruefeOcrQualitaet — Prozentangaben sind keine Betraege', () => {
 		expect(pruefeOcrQualitaet(bon).anzahlBetraege).toBe(3);
 	});
 });
+
+/*
+ * Echtbetrieb 27.09.2026: fuenf hochgeladene Fotos fielen durch, obwohl sie gut lesbar
+ * waren — sie waren links und unten angeschnitten. Aus „SUMME" wurde „UMME", und das
+ * Datum stand unterhalb des Bildrands. Nachgebaut (verfremdet) nach diesen Faellen.
+ */
+describe('pruefeOcrQualitaet — angeschnittene Fotos', () => {
+	const LINKS_ANGESCHNITTEN = [
+		'EDEKA Musterstadt',
+		'Muster Weg 3',
+		'EUR',
+		'B.O.Apfel 0,69 € x 2 1,38 A',
+		'Laugenecke 0,85 € x 2 1,70 A',
+		'p Kartof.Salat 2,49 A',
+		'sten: 5',
+		'UMME € 5,57',
+		'sa € 5,57',
+		'St NETTO MwSt UMSAT',
+		'7% 5,21 0,36 5,5',
+		'Für Ihren Einkauf von 5,57 Euro auf'
+	].join('\n');
+
+	it('erkennt eine links angeschnittene Summenzeile („UMME")', () => {
+		const q = pruefeOcrQualitaet(LINKS_ANGESCHNITTEN);
+		expect(q.hatSummenzeile).toBe(true);
+		expect(q.brauchbar).toBe(true);
+	});
+
+	it('erkennt auch „u zahlen" als angeschnittenes „zu zahlen"', () => {
+		expect(pruefeOcrQualitaet('Milch 1,29\nBrot 2,49\nu zahlen 3,78').hatSummenzeile).toBe(true);
+	});
+
+	it('wertet einen mehrfach gedruckten groessten Betrag als Endsumme, auch ohne Schluesselwort und Datum', () => {
+		const q = pruefeOcrQualitaet(['Artikel eins 1,38', 'Artikel zwei 1,70', 'Artikel drei 2,49', '5,57', 'Karte 5,57'].join('\n'));
+		expect(q.hatSummenzeile).toBe(false);
+		expect(q.hatDatum).toBe(false);
+		expect(q.groessterBetragMehrfach).toBe(true);
+		expect(q.brauchbar).toBe(true);
+	});
+
+	// Zwei gleiche Betraege allein sind noch kein Bon: die Positionen muessen auch da sein
+	// (Pruefung 27.09.2026). Sonst zaehlte die zweite Kopie beim Ueberhang als „uebrige"
+	// Betraege, und die Fragment-Pruefung liefe fuer genau diesen Fall ins Leere.
+	it('zaehlt ein reines Fuss-Fragment mit wiederholter Summe nicht als Bon', () => {
+		const q = pruefeOcrQualitaet('48,61\nKarte 48,61');
+		expect(q.groessterBetragMehrfach).toBe(false);
+		expect(q.brauchbar).toBe(false);
+	});
+
+	it('zaehlt zwei gleiche Preise ohne weitere Betraege nicht als Endsumme', () => {
+		expect(pruefeOcrQualitaet('Artikel 1,29\nArtikel 1,29').groessterBetragMehrfach).toBe(false);
+	});
+
+	it('laesst einen Text ohne jedes Endsummen-Zeichen weiter durchfallen', () => {
+		const q = pruefeOcrQualitaet('Artikel eins 1,29\nArtikel zwei 2,49');
+		expect(q.groessterBetragMehrfach).toBe(false);
+		expect(q.brauchbar).toBe(false);
+	});
+});

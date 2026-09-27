@@ -8,7 +8,8 @@ const STATUS: Record<string, string> = {
 	review: 'Prüfen',
 	confirmed: 'Bestätigt',
 	failed: 'Fehlgeschlagen',
-	doppelt: 'Doppelt'
+	doppelt: 'Doppelt',
+	verworfen: 'Im Papierkorb'
 };
 
 const QUELLE: Record<string, string> = {

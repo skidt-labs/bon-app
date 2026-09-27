@@ -225,6 +225,13 @@
       "when": 1790506083707,
       "tag": "0031_matrix_direktchat",
       "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1790519517097,
+      "tag": "0032_papierkorb",
+      "breakpoints": true
     }
   ]
 }

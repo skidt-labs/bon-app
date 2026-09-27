@@ -16,7 +16,8 @@
 		{ id: 'wirdGelesen', text: 'Wird gelesen', n: zaehler.wirdGelesen },
 		{ id: 'fehlgeschlagen', text: 'Fehlgeschlagen', n: zaehler.fehlgeschlagen },
 		{ id: 'bestaetigt', text: 'Bestätigt', n: zaehler.bestaetigt },
-		{ id: 'alle', text: 'Alle', n: null }
+		{ id: 'alle', text: 'Alle', n: null },
+		{ id: 'papierkorb', text: 'Papierkorb', n: zaehler.papierkorb }
 	]);
 </script>
 

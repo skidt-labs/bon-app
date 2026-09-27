@@ -9,9 +9,9 @@ describe('Bon-Schema', () => {
 		expect(getTableName(receiptItems)).toBe('receipt_items');
 		expect(getTableName(extractionRuns)).toBe('extraction_runs');
 	});
-	it('kennt genau die sechs Server-Status', () => {
+	it('kennt genau die sieben Server-Status', () => {
 		expect(receiptStatus.enumValues).toEqual([
-			'pending', 'extracting', 'review', 'confirmed', 'failed', 'doppelt'
+			'pending', 'extracting', 'review', 'confirmed', 'failed', 'doppelt', 'verworfen'
 		]);
 	});
 	it('kennt alle sechs Zeilentypen', () => {

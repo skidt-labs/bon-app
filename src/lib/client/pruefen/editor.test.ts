@@ -6,6 +6,7 @@ import {
 	neuNummerieren,
 	positionssumme,
 	pruefeVorBestaetigen,
+	handEingabeBegonnen,
 	type EditorZeile
 } from './editor';
 
@@ -193,5 +194,39 @@ describe('zeileVerschieben', () => {
 		const vorher = [z({ lineNo: 1 }), z({ lineNo: 2, rawText: 'BUTTER' })];
 		expect(zeileVerschieben(vorher, 0, -1)).toEqual(vorher);
 		expect(zeileVerschieben(vorher, 1, 1)).toEqual(vorher);
+	});
+});
+
+/**
+ * Ein fehlgeschlagener Bon, den jemand nur ansieht und mit „Spaeter" verlaesst, darf
+ * NICHT gespeichert werden: sonst waere er ein Bon in Pruefung mit einer leeren Zeile,
+ * und „Erneut lesen" (nur fuer fehlgeschlagene) waere fuer immer weg (Pruefung 27.09.2026).
+ */
+describe('handEingabeBegonnen', () => {
+	const leererKopf = { merchantNameRaw: null, purchasedAt: null, totalGrossCents: null, paymentMethod: null };
+	const leereZeile = zeileEinfuegen([], -1);
+
+	it('ist falsch fuer den unberuehrten Stand: leerer Kopf, eine leere Zeile', () => {
+		expect(handEingabeBegonnen(leererKopf, leereZeile)).toBe(false);
+	});
+
+	it('zaehlt Leerzeichen nicht als Eingabe', () => {
+		expect(handEingabeBegonnen({ ...leererKopf, merchantNameRaw: '  ' }, [{ ...leereZeile[0], rawText: ' ' }])).toBe(false);
+	});
+
+	it('ist wahr, sobald ein Kopffeld gesetzt ist', () => {
+		expect(handEingabeBegonnen({ ...leererKopf, totalGrossCents: 1234 }, leereZeile)).toBe(true);
+		expect(handEingabeBegonnen({ ...leererKopf, merchantNameRaw: 'Markt' }, leereZeile)).toBe(true);
+		expect(handEingabeBegonnen({ ...leererKopf, purchasedAt: '2026-09-27T10:00:00.000Z' }, leereZeile)).toBe(true);
+	});
+
+	it('ist wahr, sobald eine Zeile Text, Betrag oder Kategorie traegt', () => {
+		expect(handEingabeBegonnen(leererKopf, [{ ...leereZeile[0], rawText: 'Brot' }])).toBe(true);
+		expect(handEingabeBegonnen(leererKopf, [{ ...leereZeile[0], totalPriceCents: 199 }])).toBe(true);
+		expect(handEingabeBegonnen(leererKopf, [{ ...leereZeile[0], categoryId: 'k1' }])).toBe(true);
+	});
+
+	it('ist wahr, wenn eine zweite Zeile dazukam', () => {
+		expect(handEingabeBegonnen(leererKopf, zeileEinfuegen(leereZeile, 0))).toBe(true);
 	});
 });

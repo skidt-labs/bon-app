@@ -3,7 +3,7 @@ import type { db as Db } from '$lib/server/db';
 import { receipts, receiptItems } from '$lib/server/db/schema';
 import { monatsgrenzen } from '$lib/server/zeit';
 import { sichtbareBons } from '$lib/server/zugriff/sichtbar';
-import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
+import { darfBonVerwerfen, type Zugriffskontext } from '$lib/server/zugriff/kontext';
 
 /**
  * Die eine Liste hinter Posteingang und Bons. Beide Seiten unterscheiden sich nur im
@@ -12,7 +12,7 @@ import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
  * reine Funktion mit Test; die Abfrage selbst ist duenn.
  */
 export type ReceiptStatus = (typeof receipts.$inferSelect)['status'];
-export type StatusFilter = 'brauchtDich' | 'wirdGelesen' | 'fehlgeschlagen' | 'bestaetigt' | 'alle';
+export type StatusFilter = 'brauchtDich' | 'wirdGelesen' | 'fehlgeschlagen' | 'bestaetigt' | 'alle' | 'papierkorb';
 
 export type ListenFilter = {
 	status: StatusFilter;
@@ -32,18 +32,22 @@ export type BonZeile = {
 	failureReason: string | null;
 	source: (typeof receipts.$inferSelect)['source'];
 	positionen: number;
+	/** Seit wann im Papierkorb — null ausserhalb. */
+	verworfenAm: Date | null;
+	/** Darf dieser Mensch ihn verwerfen, zurueckholen, loeschen (darfBonVerwerfen)? */
+	darfVerwerfen: boolean;
 };
 
-export type Zaehler = { brauchtDich: number; wirdGelesen: number; fehlgeschlagen: number; bestaetigt: number };
+export type Zaehler = { brauchtDich: number; wirdGelesen: number; fehlgeschlagen: number; bestaetigt: number; papierkorb: number };
 
-const STATUS_FILTER: readonly StatusFilter[] = ['brauchtDich', 'wirdGelesen', 'fehlgeschlagen', 'bestaetigt', 'alle'];
+const STATUS_FILTER: readonly StatusFilter[] = ['brauchtDich', 'wirdGelesen', 'fehlgeschlagen', 'bestaetigt', 'alle', 'papierkorb'];
 
 /**
  * "Braucht dich" ist review UND failed — beides wartet auf einen Menschen. pending und
  * extracting warten auf die Maschine. Dieselbe Abgrenzung, die der Posteingang schon
  * bisher fuer "warten auf dich" gezogen hat. `null` heisst: nicht nach Status filtern.
  */
-export function statusListe(f: StatusFilter): ReceiptStatus[] | null {
+export function statusListe(f: StatusFilter): ReceiptStatus[] {
 	switch (f) {
 		case 'brauchtDich':
 			return ['review', 'failed'];
@@ -54,7 +58,10 @@ export function statusListe(f: StatusFilter): ReceiptStatus[] | null {
 		case 'bestaetigt':
 			return ['confirmed'];
 		case 'alle':
-			return null;
+			// Alles ausser dem Papierkorb — der hat seinen eigenen Filter.
+			return ['pending', 'extracting', 'review', 'confirmed', 'failed', 'doppelt'];
+		case 'papierkorb':
+			return ['verworfen'];
 	}
 }
 
@@ -101,13 +108,23 @@ export function filterAusQuery(
 	};
 }
 
+/**
+ * Vorgabe des Archivs (/receipts): alle Status, laufender Monat — ausser im Papierkorb. Dort
+ * liegt ein Bon nach seinem Verwerfen 30 Tage, gleich wann er gekauft wurde; mit dem
+ * Monatsfilter fehlte ein im September verworfener Bon vom August (Pruefung 27.09.2026).
+ */
+export function archivStandard(params: URLSearchParams, laufenderMonat: string): { status: StatusFilter; monat: string | null } {
+	return { status: 'alle', monat: params.get('status') === 'papierkorb' ? null : laufenderMonat };
+}
+
 export function zaehlerAus(zeilen: { status: string; n: number }[]): Zaehler {
 	const je = (s: string) => zeilen.filter((z) => z.status === s).reduce((a, z) => a + Number(z.n), 0);
 	return {
 		brauchtDich: je('review') + je('failed'),
 		wirdGelesen: je('pending') + je('extracting'),
 		fehlgeschlagen: je('failed'),
-		bestaetigt: je('confirmed')
+		bestaetigt: je('confirmed'),
+		papierkorb: je('verworfen')
 	};
 }
 
@@ -140,9 +157,7 @@ export async function listeLaden(
 	// purchased_at und soll trotzdem im richtigen Monat und an der richtigen Stelle stehen.
 	const wann = sql`coalesce(${receipts.purchasedAt}, ${receipts.createdAt})`;
 
-	const bedingungen = [sichtbareBons(k)];
-	const stati = statusListe(filter.status);
-	if (stati) bedingungen.push(inArray(receipts.status, stati));
+	const bedingungen = [sichtbareBons(k), inArray(receipts.status, statusListe(filter.status))];
 	const grenzen = filter.monat ? monatsgrenzen(filter.monat) : null;
 	if (grenzen) bedingungen.push(gte(wann, grenzen.von), lt(wann, grenzen.bis));
 	if (filter.haendler) bedingungen.push(ilike(receipts.merchantNameRaw, suchmuster(filter.haendler)));
@@ -161,7 +176,7 @@ export async function listeLaden(
 		);
 	}
 
-	const [bons, zaehler] = await Promise.all([
+	const [roh, zaehler] = await Promise.all([
 		db
 			.select({
 				id: receipts.id,
@@ -173,6 +188,8 @@ export async function listeLaden(
 				problems: receipts.needsReviewReason,
 				failureReason: receipts.failureReason,
 				source: receipts.source,
+				uploadedBy: receipts.uploadedBy,
+				verworfenAm: receipts.verworfenAm,
 				positionen: sql<number>`(select count(*)::int from ${receiptItems} where ${receiptItems.receiptId} = ${receipts.id})`
 			})
 			.from(receipts)
@@ -182,7 +199,10 @@ export async function listeLaden(
 		zaehlerLaden(db, k)
 	]);
 
-	return { bons, zaehler };
+	return {
+		bons: roh.map(({ uploadedBy, ...b }) => ({ ...b, darfVerwerfen: darfBonVerwerfen(k, uploadedBy) })),
+		zaehler
+	};
 }
 
 /** Der Bon, wenn er zu diesem Haushalt gehoert — sonst `null`. Nie 403, immer 404: ein
@@ -234,7 +254,9 @@ export async function bonAlsFehlgeschlagenMarkieren(db: typeof Db, bonId: string
 	await db
 		.update(receipts)
 		.set({ status: 'failed', failureReason: reason.slice(0, 500) })
-		.where(eq(receipts.id, bonId));
+		// Nur, solange er noch wartet: hat der Job es trotz Fehlermeldung in die Schlange
+		// geschafft und ist schon durch, bliebe sonst ein fertiger Bon als „fehlgeschlagen" stehen.
+		.where(and(eq(receipts.id, bonId), inArray(receipts.status, ['pending', 'extracting'])));
 }
 
 /**

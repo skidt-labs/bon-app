@@ -27,7 +27,10 @@ const mocks = vi.hoisted(() => ({
 	getJobById: vi.fn(async () => ({ retryCount: 1, retryLimit: 3 }) as unknown),
 	// Die Doppel-Suche hat eigene Tests gegen die echte Datenbank (bons/doppelt.db.test.ts).
 	// Hier nur: was der Worker mit ihrer Antwort macht — auch wenn sie wirft.
-	originalFuerNeuenBon: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null)
+	originalFuerNeuenBon: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null),
+	// Was das naechste .returning() eines Updates liefert. Leer = „eine Zeile getroffen";
+	// ein vorangestelltes [] stellt „der Bon ist nicht mehr offen" nach.
+	updateReturning: [] as unknown[][]
 }));
 
 vi.mock('$lib/server/bons/doppelt', () => ({
@@ -68,7 +71,9 @@ vi.mock('$lib/server/db', () => {
 			set: (set: unknown) => ({
 				where: () => {
 					mocks.updateCalls.push({ table, set });
-					return Promise.resolve();
+					return Object.assign(Promise.resolve(), {
+						returning: () => Promise.resolve(mocks.updateReturning.shift() ?? [{ id: 'getroffen' }])
+					});
 				}
 			})
 		};
@@ -86,7 +91,7 @@ vi.mock('$lib/server/db', () => {
 	};
 });
 
-import { productionDeps } from './extract-receipt';
+import { productionDeps, BonNichtMehrOffen } from './extract-receipt';
 import { receipts, receiptItems, extractionRuns } from '$lib/server/db/schema';
 import { checkPlausibility } from '$lib/server/validation/plausibility';
 import type { ExtractedReceipt } from '$lib/server/extraction/schema';
@@ -95,6 +100,7 @@ beforeEach(() => {
 	mocks.insertCalls.length = 0;
 	mocks.updateCalls.length = 0;
 	mocks.merchantUpsertError = null;
+	mocks.updateReturning.length = 0;
 	vi.clearAllMocks();
 	// vi.clearAllMocks() leert nur die Aufrufliste, nicht die per vi.fn(impl) beim
 	// Erstellen gesetzte Standard-Implementierung — die bleibt also erhalten. Ein
@@ -533,6 +539,39 @@ describe('productionDeps().saveResult — Doppel-Erkennung', () => {
 		expect(set.vermutetesOriginalId).toBeNull();
 		expect(fehler).toHaveBeenCalled();
 		fehler.mockRestore();
+	});
+});
+
+describe('productionDeps — der Bon ist nicht mehr offen', () => {
+	const bon: ExtractedReceipt = {
+		merchantName: 'ALDI', merchantAddress: null, purchasedAt: null,
+		totalGrossCents: 100, currency: 'EUR', paymentMethod: null, vatSummary: [],
+		items: [
+			{ lineNo: 1, rawText: 'BANANEN', lineType: 'article', quantity: '1', unit: 'stk',
+				unitPriceCents: 100, totalPriceCents: 100, vatClass: 'A', appliesToLine: null }
+		]
+	};
+
+	it('saveResult wirft BonNichtMehrOffen, wenn der Bon nicht mehr auf extracting steht', async () => {
+		// Ein Mensch hat ihn inzwischen eingetragen und bestaetigt: die Transaktion muss
+		// zurueckrollen, sonst waeren seine Zeilen geloescht.
+		mocks.updateReturning.push([]);
+		const deps = productionDeps({ id: 'test', model: 'test-1', extract: vi.fn() });
+		await expect(
+			deps.saveResult({
+				receiptId: 'r1', result: bon, raw: bon, servedModel: 'test-1', problems: [],
+				provider: 'test', model: 'test-1', durationMs: 10, usage: null, ocrText: null, ocr: null, ocrZeilen: null
+			})
+		).rejects.toBeInstanceOf(BonNichtMehrOffen);
+		expect(mocks.insertCalls.some((c) => c.table === extractionRuns)).toBe(false);
+	});
+
+	it('markFailed schreibt keinen Lauf und meldet nichts, wenn der Bon nicht mehr offen ist', async () => {
+		mocks.updateReturning.push([]);
+		const deps = productionDeps({ id: 'test', model: 'test-1', extract: vi.fn() });
+		await deps.markFailed('r1', 'kaputt');
+		expect(mocks.insertCalls.some((c) => c.table === extractionRuns)).toBe(false);
+		expect(mocks.notifyMatrix).not.toHaveBeenCalled();
 	});
 });
 

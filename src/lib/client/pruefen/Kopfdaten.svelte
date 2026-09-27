@@ -43,8 +43,11 @@
 	const leerIstNull = (s: string) => (s.trim() === '' ? null : s);
 </script>
 
-<div class="grid grid-cols-2 gap-3 lg:grid-cols-4">
-	<label class="grid gap-1">
+<!-- `grid-cols-1` in jedem Feld: ohne ihn richtet sich die Spalte nach der eingebauten
+     Mindestbreite des <input>, und bei vier Feldern nebeneinander ragten Datum und Endsumme
+     am Schreibtisch rechts heraus (27.09.2026). -->
+<div class="grid grid-cols-2 gap-3 xl:grid-cols-4">
+	<label class="grid grid-cols-1 gap-1">
 		<span class="text-[10.5px] font-bold tracking-[0.08em] text-leise uppercase">Händler</span>
 		<input
 			value={merchantNameRaw ?? ''}
@@ -53,7 +56,7 @@
 			placeholder="Unbekannt"
 		/>
 	</label>
-	<label class="grid gap-1">
+	<label class="grid grid-cols-1 gap-1">
 		<span class="text-[10.5px] font-bold tracking-[0.08em] text-leise uppercase">Datum</span>
 		<input
 			type="datetime-local"
@@ -62,7 +65,7 @@
 			class="rounded-lg border border-linie bg-papier px-2.5 py-1.5 font-semibold"
 		/>
 	</label>
-	<label class="grid gap-1">
+	<label class="grid grid-cols-1 gap-1">
 		<span class="text-[10.5px] font-bold tracking-[0.08em] text-leise uppercase">Zahlart</span>
 		<!-- Freitext, kein Auswahlfeld: in der Datenbank steht, was auf dem Bon stand —
 		     "Kreditkarte", "MasterCard", "Kartenzahlung". Eine Liste aus card/cash/other
@@ -74,7 +77,7 @@
 			placeholder="—"
 		/>
 	</label>
-	<label class="grid gap-1">
+	<label class="grid grid-cols-1 gap-1">
 		<span class="text-[10.5px] font-bold tracking-[0.08em] text-leise uppercase">Endsumme</span>
 		<Betragsfeld
 			bind:cents={totalGrossCents}

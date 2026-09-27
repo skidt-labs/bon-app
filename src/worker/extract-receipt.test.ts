@@ -4,6 +4,7 @@ import { BonUnlesbarError, OcrWerkzeugKaputtError } from '$lib/server/extraction
 import { BildwegNichtFreigegeben, KiSchluesselUnlesbar } from '$lib/server/ki/fehler';
 import {
   handleExtractJobs,
+  BonNichtMehrOffen,
   kostenAusTokens,
   sanitizeItemsForInsert,
   assertBatchSizeOne,
@@ -215,7 +216,7 @@ describe('handleExtractJobs', () => {
     const zeilen = [{ text: 'L$DL', box: [0, 0, 10, 10] as [number, number, number, number], confidence: 12 }];
     const fehler = new BonUnlesbarError(
       'L$DL kauderwelsch',
-      { brauchbar: false, hatSummenzeile: false, anzahlBetraege: 0, hatDatum: false, ueberhangGroessterBetrag: null },
+      { brauchbar: false, hatSummenzeile: false, anzahlBetraege: 0, hatDatum: false, groessterBetragMehrfach: false, ueberhangGroessterBetrag: null },
       null,
       zeilen
     );
@@ -229,6 +230,31 @@ describe('handleExtractJobs', () => {
 
 // Entwurf E7a: 503/429/Zeitüberlauf/Verbindungsabbruch sind "später nochmal", kein
 // "kaputt" — siehe die ausführliche Begründung am Code (istVoruebergehenderFehler).
+/**
+ * Seit fehlgeschlagene Bons von Hand eingetragen werden (27.09.2026), kann ein Job einen
+ * Bon antreffen, den ein Mensch schon fertig hat — etwa ein pg-boss-Nachversuch nach
+ * einem gescheiterten markFailed. Dann darf der Worker nichts mehr anfassen.
+ */
+describe('handleExtractJobs — Bon ist nicht mehr offen', () => {
+  it('liest nicht, speichert nicht und meldet nichts, wenn loadImage null liefert', async () => {
+    const d = deps({ loadImage: vi.fn(async () => null) });
+    await handleExtractJobs([job('r1')] as never, d as never);
+    expect(d.provider.extract).not.toHaveBeenCalled();
+    expect(d.saveResult).not.toHaveBeenCalled();
+    expect(d.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('markiert nicht als gescheitert und wirft nicht, wenn saveResult den Bon nicht mehr offen vorfindet', async () => {
+    const d = deps({
+      saveResult: vi.fn(async () => {
+        throw new BonNichtMehrOffen('r1');
+      })
+    });
+    await expect(handleExtractJobs([job('r1')] as never, d as never)).resolves.toBeUndefined();
+    expect(d.markFailed).not.toHaveBeenCalled();
+  });
+});
+
 describe('istVoruebergehenderFehler', () => {
   it('erkennt HTTP 503 und 429 als vorübergehend', () => {
     expect(istVoruebergehenderFehler(new ExtractionHttpError(503, 'HTTP 503'))).toBe(true);
@@ -338,6 +364,7 @@ describe('handleExtractJobs — vorübergehende vs. dauerhafte Fehler (Entwurf E
       // ueberhangGroessterBetrag ist null, weil Kauderwelsch gar keinen Betrag enthaelt
       // — die Leerstelle, nicht die Zahl 0 (siehe qualitaet.ts).
       brauchbar: false, hatSummenzeile: false, anzahlBetraege: 0, hatDatum: false,
+      groessterBetragMehrfach: false,
       ueberhangGroessterBetrag: null
     });
     const d = deps({
@@ -364,6 +391,7 @@ describe('handleExtractJobs — vorübergehende vs. dauerhafte Fehler (Entwurf E
     const fehler = new BonUnlesbarError(
       'L$DL kauderwelsch',
       { brauchbar: false, hatSummenzeile: false, anzahlBetraege: 0, hatDatum: false,
+        groessterBetragMehrfach: false,
         ueberhangGroessterBetrag: null },
       lauf
     );

@@ -7,6 +7,16 @@ export function kontextAus(user: SessionUser): Zugriffskontext {
 	return { haushaltId: user.householdId, nutzerId: user.id, rolle: user.rolle };
 }
 
+/**
+ * Darf dieser Mensch diesen Bon in den Papierkorb legen, zurueckholen oder endgueltig
+ * loeschen? Wer ihn hochgeladen hat, und der Verwalter (Entscheidung 27.09.2026). Sehen
+ * allein genuegt nicht: ein geteilter Bon ist fuer alle im Haushalt sichtbar, gehoert aber
+ * nicht allen.
+ */
+export function darfBonVerwerfen(k: Zugriffskontext, uploadedBy: string): boolean {
+	return uploadedBy === k.nutzerId || k.rolle === 'verwalter';
+}
+
 /** Macht ueber das GETEILTE. Sagt nichts darueber, was jemand sieht. */
 export function darfGeteiltesVerwalten(k: Zugriffskontext): boolean {
 	return k.rolle === 'verwalter';

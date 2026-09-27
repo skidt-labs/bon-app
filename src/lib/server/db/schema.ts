@@ -193,7 +193,12 @@ export const receiptStatus = pgEnum('receipt_status', [
 	// Einkaufs ist. Kein Loeschen: Bild und Daten bleiben, der Bon faellt nur aus
 	// Posteingang und Berichten heraus (die zaehlen ausdruecklich 'confirmed') und laesst
 	// sich wiederherstellen. Siehe bons/doppelt.ts.
-	'doppelt'
+	'doppelt',
+	// Im Papierkorb (Entwurf 2026-09-27-papierkorb): 30 Tage wiederherstellbar, danach
+	// endgueltig geloescht. Ein eigener Status statt einer Spalte, weil Berichte, Budgets,
+	// Posteingang und Stapel schon nach ausdruecklichen Status fragen — so faellt ein
+	// verworfener Bon dort heraus, ohne dass eine Abfrage einen neuen Filter braucht.
+	'verworfen'
 ]);
 
 export const lineType = pgEnum('line_type', [
@@ -311,6 +316,10 @@ export const receipts = pgTable(
 		}),
 		needsReviewReason: jsonb('needs_review_reason').$type<string[]>(),
 		failureReason: text('failure_reason'),
+		// Genau dann gesetzt, wenn status = 'verworfen' (siehe bons/papierkorb.ts).
+		verworfenAm: timestamp('verworfen_am', { withTimezone: true }),
+		verworfenVon: uuid('verworfen_von').references(() => users.id, { onDelete: 'set null' }),
+		statusVorVerwerfen: receiptStatus('status_vor_verwerfen'),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
 		confirmedBy: uuid('confirmed_by').references(() => users.id)

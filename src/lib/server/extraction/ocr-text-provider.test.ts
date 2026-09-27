@@ -462,6 +462,7 @@ describe('BonUnlesbarError erklaert seine eigene Entscheidung', () => {
 			hatSummenzeile: true,
 			anzahlBetraege: 24,
 			hatDatum: false,
+			groessterBetragMehrfach: false,
 			ueberhangGroessterBetrag: 2.19
 		});
 
@@ -474,7 +475,7 @@ describe('BonUnlesbarError erklaert seine eigene Entscheidung', () => {
 	it('nennt fehlende Beträge bzw. fehlenden Kontext, wenn DIE gegriffen haben', () => {
 		const ohneBetraege = new BonUnlesbarError('', {
 			brauchbar: false, hatSummenzeile: false, anzahlBetraege: 0,
-			hatDatum: false, ueberhangGroessterBetrag: null
+			hatDatum: false, groessterBetragMehrfach: false, ueberhangGroessterBetrag: null
 		});
 		expect(ohneBetraege.message).toContain('zu wenige erkennbare Beträge');
 		expect(ohneBetraege.message).toContain('weder Summenzeile noch Datum');
@@ -546,4 +547,39 @@ describe('ocrZeilen (Etappe 2 der Oberflaeche)', () => {
       ocrZeilen: [{ text: 'Kauderwelsch', box: [10, 20, 60, 14], confidence: 91 }]
     });
   });
+});
+
+/*
+ * Echtbetrieb 27.09.2026: bei einem unten angeschnittenen Foto stand im OCR-Text KEIN
+ * Datum — das Modell gab trotzdem den 15.01.2026 an. Ein fehlendes Datum faellt beim
+ * Pruefen auf, ein erfundenes landet unbemerkt im falschen Monat.
+ */
+describe('createOcrTextProvider — kein erfundenes Kaufdatum', () => {
+	const OHNE_DATUM = ['Supermarkt Musterstadt', 'Milch 1,29 A', 'Brot 2,49 A', 'Zu zahlen 3,78'].join('\n');
+
+	it('verwirft das Datum des Modells, wenn im OCR-Text keines steht', async () => {
+		const antwort = { ...basisAntwort(ZWEI_ARTIKEL), purchasedAt: '2026-01-15T12:00:00' };
+		const provider = createOcrTextProvider({
+			baseUrl: 'https://example.test/v1',
+			apiKey: 'k',
+			model: 'm',
+			fetchImpl: fakeFetchGibt(JSON.stringify(antwort)) as unknown as typeof fetch,
+			execFileImpl: execFileImplMitText(OHNE_DATUM)
+		});
+		const { receipt, warnings } = await provider.extract(Buffer.from('bild'));
+		expect(receipt.purchasedAt).toBeNull();
+		expect(warnings.join(' ')).toContain('Kaufdatum verworfen');
+	});
+
+	it('behaelt das Datum, wenn es im OCR-Text steht', async () => {
+		const antwort = { ...basisAntwort(ZWEI_ARTIKEL), purchasedAt: '2026-01-01T12:00:00' };
+		const provider = createOcrTextProvider({
+			baseUrl: 'https://example.test/v1',
+			apiKey: 'k',
+			model: 'm',
+			fetchImpl: fakeFetchGibt(JSON.stringify(antwort)) as unknown as typeof fetch,
+			execFileImpl: execFileImplMitText(LESBARER_TEXT)
+		});
+		expect((await provider.extract(Buffer.from('bild'))).receipt.purchasedAt).toBe('2026-01-01T12:00:00');
+	});
 });

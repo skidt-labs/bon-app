@@ -6,6 +6,7 @@ import {
 	pruefeKorrekturen,
 	korrekturenAnwenden,
 	lernenNachtragen,
+	originalBeimEintragen,
 	KorrekturVerfehlt,
 	type Gelerntes
 } from '$lib/server/receipts/korrekturen';
@@ -23,12 +24,16 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 
 	const receipt = await bonLaden(db, locals.zugriff!, params.id);
 	if (!receipt) error(404, 'Bon nicht gefunden');
-	if (receipt.status !== 'review') {
+	// `failed` darf auch: ein Mensch hat den Bon von Hand eingetragen, weil das Auslesen
+	// scheiterte (27.09.2026). Das Bild ist da, und wer bestaetigt, hat es angesehen.
+	if (receipt.status !== 'review' && receipt.status !== 'failed') {
 		error(
 			409,
 			receipt.status === 'confirmed'
 				? 'Dieser Bon ist bereits bestätigt.'
-				: 'Dieser Bon ist noch nicht ausgelesen und kann darum nicht bestätigt werden.'
+				: receipt.status === 'doppelt'
+					? 'Dieser Bon ist als doppelt verworfen und kann darum nicht bestätigt werden.'
+					: 'Dieser Bon wird gerade ausgelesen und kann darum nicht bestätigt werden.'
 		);
 	}
 
@@ -42,11 +47,25 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!geparst.success) error(400, 'Ungültige Korrekturen');
 	const geprueft = pruefeKorrekturen(geparst.data);
 	if (!geprueft.ok) error(400, geprueft.grund);
+	// Beim ausgelesenen Bon meldet ein fehlender Betrag der Worker ('missing_total'). Ein
+	// von Hand eingetragener Fehlschlag haette ohne Endsumme in den Berichten 0 EUR.
+	if (receipt.status === 'failed' && geparst.data.receipt.totalGrossCents === null) {
+		error(400, 'Ohne Endsumme lässt sich ein von Hand eingetragener Bon nicht bestätigen.');
+	}
+
+	// Sieht er aus wie ein schon erfasster Bon, wird er NICHT bestaetigt, sondern landet mit
+	// dem Doppel-Hinweis in der Pruefung — dieselbe Entscheidung wie bei einem gelesenen.
+	const doppelVon = await originalBeimEintragen(receipt, geparst.data);
 
 	let gelernt: Gelerntes[] = [];
 	try {
 		gelernt = await db.transaction((tx) =>
-			korrekturenAnwenden(tx, receipt.id, geparst.data, { bestaetigen: true, userId: locals.user!.id })
+			korrekturenAnwenden(tx, receipt.id, geparst.data, {
+				bestaetigen: doppelVon === null,
+				userId: locals.user!.id,
+				ausStatus: receipt.status,
+				doppelVon
+			})
 		);
 	} catch (err) {
 		if (err instanceof KorrekturVerfehlt) {
@@ -59,5 +78,5 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// Regel, damit derselbe Artikel beim naechsten Bon ohne Modellaufruf einsortiert wird.
 	await lernenNachtragen(receipt.id, gelernt);
 
-	return json({ ok: true });
+	return json(doppelVon ? { ok: true, doppelt: true } : { ok: true });
 };

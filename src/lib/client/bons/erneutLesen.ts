@@ -18,7 +18,15 @@ export async function erneutLesen(
 	} catch {
 		return { ok: false, meldung: 'Keine Verbindung — bitte später noch einmal versuchen.' };
 	}
-	if (antwort.ok) return { ok: true };
+	if (antwort.ok) {
+		// 200 heisst nicht immer „eingereiht": scheiterte das Einreihen, steht der Bon wieder
+		// auf fehlgeschlagen, und die Antwort sagt queued:false.
+		const j = (await antwort.json().catch(() => null)) as { queued?: unknown } | null;
+		if (j?.queued === false) {
+			return { ok: false, meldung: 'Konnte nicht eingereiht werden — bitte später noch einmal versuchen.' };
+		}
+		return { ok: true };
+	}
 
 	// SvelteKit antwortet auf error(status, text) mit {"message": text}: der Satz fuer
 	// den Menschen. Traegt der Rumpf keinen, bleibt wenigstens der Status stehen.

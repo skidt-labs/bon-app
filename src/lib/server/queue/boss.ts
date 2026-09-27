@@ -14,6 +14,9 @@ export type ExtractJob = { receiptId: string };
 export const QUEUE_MATRIX_BERICHT = 'matrix-bericht';
 export type MatrixBerichtJob = { userId: string; text: string };
 
+/** Taeglich 04:30: Bons, die laenger als 30 Tage im Papierkorb liegen, endgueltig loeschen. */
+export const QUEUE_PAPIERKORB = 'papierkorb-leeren';
+
 let instance: PgBoss | null = null;
 let starting: Promise<PgBoss> | null = null;
 
@@ -31,6 +34,7 @@ async function start(): Promise<PgBoss> {
 	// aufrufen (siehe Task-7-Report für die Begründung).
 		await boss.createQueue(QUEUE_EXTRACT);
 		await boss.createQueue(QUEUE_MATRIX_BERICHT);
+		await boss.createQueue(QUEUE_PAPIERKORB);
 	} catch (err) {
 		// Scheitert createQueue, ist boss.start() bereits durch: die Instanz hält einen
 		// offenen Pool und laufende Intervalle. Ohne dieses stop() bliebe bei JEDEM

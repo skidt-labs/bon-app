@@ -2,7 +2,7 @@ import { and, eq, inArray, isNull, or } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { categories, receiptItems, receipts } from '$lib/server/db/schema';
 import { ordneAusGedaechtnis, type Zuordnung } from './kaskade';
-import { ordneMitModell, type ModellDeps } from './modell';
+import { ordneMitNachfrage, type ModellDeps } from './modell';
 import { SONSTIGES_UNSORTIERT_SLUG } from './baum';
 import type { ExtractionUsage } from '$lib/server/extraction/types';
 
@@ -101,7 +101,7 @@ export async function bonEinsortieren(
 		let fehler: string | null = null;
 		let usage: ExtractionUsage = null;
 		try {
-			const m = await ordneMitModell(offen, modell);
+			const m = await ordneMitNachfrage(offen, modell);
 			vorschlaege = m.vorschlaege;
 			verworfen = m.verworfen;
 			fehler = m.fehler;

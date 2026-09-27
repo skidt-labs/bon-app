@@ -71,8 +71,12 @@ export { betraegeInCent };
  */
 
 /** Schlüsselwörter der Endsumme. Wortgrenzen sorgen dafür, dass z. B. "Summe" nicht
- * zufällig in einem Artikelnamen mitgezählt wird. */
-const SUMMENZEILE_REGEX = /(zu\s*zahlen|\bsumme\b|gesamtbetrag|gesamt\s*betrag|endbetrag)/i;
+ * zufällig in einem Artikelnamen mitgezählt wird.
+ *
+ * Auch links angeschnitten: Im Echtbetrieb (27.09.2026) fielen gut lesbare Fotos durch,
+ * weil der erste Buchstabe am Bildrand fehlte — aus „SUMME" wurde „UMME", aus „zu zahlen"
+ * „u zahlen". Beide Reste sind als eigenes Wort so selten, dass sie sicher genug sind. */
+const SUMMENZEILE_REGEX = /(\bz?u\s*zahlen|\bs?umme\b|gesamtbetrag|gesamt\s*betrag|endbetrag)/i;
 
 /** Ab wie vielen erkannten Beträgen ein Bon als "hat Beträge" zählt. An den vier
  * lesbaren Testvorlagen lag der Wert real zwischen 16 und 47 (siehe Aufgaben-Bericht);
@@ -113,6 +117,9 @@ const MIN_BETRAEGE = 2;
  */
 export const MAX_UEBERHANG_GROESSTER_BETRAG = 2;
 
+/** Anteil, den die uebrigen Betraege (ohne Kopien des groessten) mindestens ausmachen. */
+const MIN_ANTEIL_POSITIONEN_BEI_WIEDERHOLTER_SUMME = 0.5;
+
 export type OcrQualitaet = {
   /** Das Gesamturteil: darf der Text an das Modell weitergereicht werden? */
   brauchbar: boolean;
@@ -122,6 +129,14 @@ export type OcrQualitaet = {
   anzahlBetraege: number;
   /** Enthält der Text ein Kauf- oder TSE-Datum? */
   hatDatum: boolean;
+  /**
+   * Steht der groesste Betrag mehrfach da — und stehen darunter auch Positionen (siehe
+   * MIN_ANTEIL_POSITIONEN_BEI_WIEDERHOLTER_SUMME)? Auf einem Kassenbon ist der wiederholte
+   * groesste Betrag fast immer die Endsumme (Summenzeile, Zahlungszeile, Steuerblock). Ein
+   * zweites Zeichen fuer „das ist ein Bon", wenn die Summenzeile angeschnitten und das
+   * Datum abgeschnitten ist.
+   */
+  groessterBetragMehrfach: boolean;
   /**
    * Der groesste Betrag geteilt durch die Summe aller uebrigen (ohne Datumstreffer).
    * `null`, wenn gar keine Betraege gefunden wurden. Ein grosser Wert heisst: ein
@@ -145,11 +160,21 @@ export function pruefeOcrQualitaet(text: string): OcrQualitaet {
   const ueberhangGroessterBetrag =
     werte.length === 0 ? null : uebrige > 0 ? groesster / uebrige : Number.POSITIVE_INFINITY;
 
+  // Mehrfach UND mit Positionen darunter: die Betraege OHNE die Kopien des groessten
+  // muessen wenigstens die Haelfte von ihm ausmachen. Sonst genuegten ein Fuss-Fragment
+  // („48,61 / Karte 48,61") oder zwei gleiche Preise — und weil die zweite Kopie beim
+  // Ueberhang als „uebriger" Betrag zaehlt, griffe auch die Fragment-Pruefung nicht.
+  const ohneKopien = werte.filter((w) => w !== groesster).reduce((a, b) => a + b, 0);
+  const groessterBetragMehrfach =
+    groesster > 0 &&
+    werte.filter((w) => w === groesster).length >= 2 &&
+    ohneKopien >= groesster * MIN_ANTEIL_POSITIONEN_BEI_WIEDERHOLTER_SUMME;
+
   const brauchbar =
     anzahlBetraege >= MIN_BETRAEGE &&
-    (hatSummenzeile || hatDatum) &&
+    (hatSummenzeile || hatDatum || groessterBetragMehrfach) &&
     (ueberhangGroessterBetrag === null ||
       ueberhangGroessterBetrag <= MAX_UEBERHANG_GROESSTER_BETRAG);
 
-  return { brauchbar, hatSummenzeile, anzahlBetraege, hatDatum, ueberhangGroessterBetrag };
+  return { brauchbar, hatSummenzeile, anzahlBetraege, hatDatum, groessterBetragMehrfach, ueberhangGroessterBetrag };
 }

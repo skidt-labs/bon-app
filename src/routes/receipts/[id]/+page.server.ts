@@ -6,6 +6,7 @@ import { extractionRuns, categories } from '$lib/server/db/schema';
 import { bonLaden, bonPositionenLaden } from '$lib/server/bons/liste';
 import { stapelLaden } from '$lib/server/receipts/stapel';
 import { originalKurz } from '$lib/server/bons/doppelt';
+import { darfBonVerwerfen } from '$lib/server/zugriff/kontext';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -61,5 +62,14 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		receipt.vermutetesOriginalId ? originalKurz(db, k, receipt.vermutetesOriginalId) : null
 	]);
 
-	return { receipt, items, ocrZeilen: lauf?.ocrZeilen ?? null, kategorien, stapel, original };
+	return {
+		receipt,
+		items,
+		ocrZeilen: lauf?.ocrZeilen ?? null,
+		kategorien,
+		stapel,
+		original,
+		// Verwerfen darf, wer ihn hochgeladen hat, und der Verwalter (bons/papierkorb.ts).
+		darfVerwerfen: darfBonVerwerfen(k, receipt.uploadedBy)
+	};
 };

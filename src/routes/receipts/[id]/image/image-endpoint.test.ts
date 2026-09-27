@@ -28,12 +28,15 @@ function fakeEvent(
 	user: { id: string; householdId: string; rolle?: 'verwalter' | 'mitglied' } | null = {
 		id: 'user-1',
 		householdId: 'household-1'
-	}
+	},
+	adresse = 'http://bon.local/receipts/r1/image'
 ) {
 	const zugriff = user
 		? { haushaltId: user.householdId, nutzerId: user.id, rolle: user.rolle ?? 'mitglied' }
 		: null;
-	return { params: { id: 'r1' }, locals: { user, zugriff } } as unknown as Parameters<typeof GET>[0];
+	return { params: { id: 'r1' }, url: new URL(adresse), locals: { user, zugriff } } as unknown as Parameters<
+		typeof GET
+	>[0];
 }
 
 describe('GET /receipts/[id]/image', () => {
@@ -93,5 +96,16 @@ describe('GET /receipts/[id]/image', () => {
 		expect(response.headers.get('cache-control')).toBe('private, max-age=31536000');
 		const bytes = new Uint8Array(await response.arrayBuffer());
 		expect(Array.from(bytes)).toEqual([1, 2, 3, 4]);
+	});
+
+	it('liefert mit ?vorschau das kleine Vorschaubild statt des Originals', async () => {
+		mocks.selectResult = [{ imagePath: '2026/09/x.webp', thumbPath: '2026/09/x.thumb.webp' }];
+		mocks.readFile.mockResolvedValue(Buffer.from([9]));
+
+		const response = await GET(fakeEvent(undefined, 'http://bon.local/receipts/r1/image?vorschau'));
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get('content-type')).toBe('image/webp');
+		expect(String(mocks.readFile.mock.calls[0][0])).toMatch(/x\.thumb\.webp$/);
 	});
 });

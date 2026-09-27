@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { count, eq } from 'drizzle-orm';
+import { and, count, eq, ne } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { receipts, users } from '$lib/server/db/schema';
 import { listeLaden } from './liste';
+import { sichtbareBons } from '$lib/server/zugriff/sichtbar';
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
 
 /**
@@ -37,10 +38,13 @@ describe.skipIf(AUS)('listeLaden gegen die echte Datenbank', () => {
 			haendler: null,
 			suche: null
 		});
+		// Gezaehlt wird, was DIESER Mensch sehen soll: sichtbar (eigene private + geteilte) und
+		// nicht im Papierkorb. Bis zum 27.09.2026 stand hier nur der Haushalt — das ging gut,
+		// solange es keine privaten Bons eines anderen Mitglieds gab.
 		const [{ n }] = await db
 			.select({ n: count() })
 			.from(receipts)
-			.where(eq(receipts.householdId, erster.householdId));
+			.where(and(eq(receipts.householdId, erster.householdId), sichtbareBons(k), ne(receipts.status, 'verworfen')));
 		expect(bons.length).toBe(Math.min(Number(n), 200));
 		expect(zaehler.brauchtDich + zaehler.wirdGelesen + zaehler.bestaetigt).toBeLessThanOrEqual(Number(n));
 		for (const b of bons) expect(b.positionen).toBeGreaterThanOrEqual(0);

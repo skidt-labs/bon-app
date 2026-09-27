@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { receipts } from '$lib/server/db/schema';
 import { storeReceiptImage } from '$lib/server/storage/images';
@@ -115,7 +115,8 @@ const echteDeps: AufnahmeDeps = {
 		await db
 			.update(receipts)
 			.set({ status: 'failed', failureReason: grund.slice(0, 500) })
-			.where(eq(receipts.id, receiptId));
+			// Nur, solange er noch wartet — siehe bonAlsFehlgeschlagenMarkieren.
+			.where(and(eq(receipts.id, receiptId), inArray(receipts.status, ['pending', 'extracting'])));
 	}
 };
 

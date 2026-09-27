@@ -5,16 +5,19 @@ import { bonLaden } from '$lib/server/bons/liste';
 import { receiptPathFor } from '$lib/server/storage/images';
 import type { RequestHandler } from './$types';
 
-export const GET: RequestHandler = async ({ params, locals }) => {
+export const GET: RequestHandler = async ({ params, url, locals }) => {
 	if (!locals.user) error(401, 'Nicht angemeldet');
 	const row = await bonLaden(db, locals.zugriff!, params.id);
 	if (!row) error(404, 'Bon nicht gefunden');
 
 	// storeReceiptImage (Task 6) schreibt das Original ausnahmslos als .webp — kein
 	// Content-Type-Sniffing nötig, der Header ist so verlässlich wie die Spalte selbst.
+	// `?vorschau`: das kleine Bild, das beim Speichern gleich mit entsteht (storeReceiptImage)
+	// — fuer die Bonliste, in der ein fehlgeschlagener Bon sonst nicht zu erkennen waere.
+	const pfad = url.searchParams.has('vorschau') ? row.thumbPath : row.imagePath;
 	let buf: Buffer;
 	try {
-		buf = await readFile(receiptPathFor(row.imagePath));
+		buf = await readFile(receiptPathFor(pfad));
 	} catch (err) {
 		// Die DB-Zeile existiert, die Datei auf der Platte nicht (mehr) — z. B. nach
 		// einem Restore ohne die zugehörigen Bilddateien. Das ist ein Betriebsfehler,

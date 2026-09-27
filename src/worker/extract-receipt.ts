@@ -1,7 +1,7 @@
 // pg-boss 12 exportiert `Job<T>` als eigenen benannten Typ, nicht als `PgBoss.Job<T>`
 // (dieselbe Fußangel wie beim `PgBoss`-Klassenimport selbst, siehe queue/boss.ts).
 import type { Job } from 'pg-boss';
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { receipts, receiptItems, extractionRuns } from '$lib/server/db/schema';
 import { receiptPathFor } from '$lib/server/storage/images';
@@ -115,8 +115,21 @@ export type SaveArgs = {
   ocrZeilen: OcrZeileKurz[] | null;
 };
 
+/**
+ * Der Bon steht nicht mehr auf `pending`/`extracting` — ein Mensch hat ihn inzwischen von
+ * Hand eingetragen oder bestaetigt (27.09.2026: fehlgeschlagene Bons sind eintragbar).
+ * Kein Fehler des Bons: der Job endet ohne Wirkung, weder `failed` noch ein Nachversuch.
+ */
+export class BonNichtMehrOffen extends Error {
+  constructor(receiptId: string) {
+    super(`Bon ${receiptId} ist nicht mehr in Bearbeitung`);
+    this.name = 'BonNichtMehrOffen';
+  }
+}
+
 export type ExtractDeps = {
-  loadImage: (receiptId: string) => Promise<Buffer>;
+  /** null: der Bon ist nicht mehr offen (siehe BonNichtMehrOffen) — nichts zu tun. */
+  loadImage: (receiptId: string) => Promise<Buffer | null>;
   provider: ExtractionProvider;
   saveResult: (args: SaveArgs) => Promise<void>;
   /**
@@ -160,6 +173,10 @@ export async function handleExtractJobs(
     const startedAt = Date.now();
     try {
       const image = await deps.loadImage(receiptId);
+      if (image === null) {
+        console.warn(`[worker] Bon ${receiptId} ist nicht mehr in Bearbeitung, Job endet ohne Wirkung`);
+        continue;
+      }
       const { receipt: result, usage, raw, servedModel, warnings, ocrText, ocr, ocrZeilen } = await deps.provider.extract(
         image,
         job.signal
@@ -184,6 +201,11 @@ export async function handleExtractJobs(
         ocrZeilen
       });
     } catch (err) {
+      if (err instanceof BonNichtMehrOffen) {
+        // Ein Mensch war schneller. Kein markFailed — der Bon ist ja fertig.
+        console.warn(`[worker] ${err.message}, Ergebnis verworfen`);
+        continue;
+      }
       if (istVoruebergehenderFehler(err)) {
         // Aufgabe 4, Teil B: erst prüfen, ob pg-boss diesen Bon überhaupt noch
         // einmal anfassen WIRD, bevor entschieden wird, ob der Stapel wirft. Das
@@ -470,7 +492,14 @@ export function productionDeps(
         .from(receipts)
         .where(eq(receipts.id, receiptId));
       if (!row) throw new Error(`Bon ${receiptId} nicht gefunden`);
-      await db.update(receipts).set({ status: 'extracting' }).where(eq(receipts.id, receiptId));
+      // Nur aus `pending` (oder einem Nachversuch aus `extracting`) heraus. Ein Nachversuch
+      // von pg-boss kann einen Bon antreffen, den inzwischen ein Mensch eingetragen hat.
+      const offen = await db
+        .update(receipts)
+        .set({ status: 'extracting' })
+        .where(and(eq(receipts.id, receiptId), inArray(receipts.status, ['pending', 'extracting'])))
+        .returning({ id: receipts.id });
+      if (offen.length === 0) return null;
       return readFile(receiptPathFor(row.imagePath));
     },
 
@@ -549,7 +578,7 @@ export function productionDeps(
           );
         }
 
-        await tx.update(receipts).set({
+        const kopf = await tx.update(receipts).set({
           merchantId,
           merchantNameRaw: result.merchantName,
           purchasedAt,
@@ -560,7 +589,12 @@ export function productionDeps(
           vermutetesOriginalId,
           status: 'review',
           failureReason: null
-        }).where(eq(receipts.id, receiptId));
+        })
+          // Nur solange der Bon noch in Bearbeitung ist. Sonst rollt die Transaktion
+          // zurueck — samt dem Loeschen oben, das sonst eingetippte Zeilen naehme.
+          .where(and(eq(receipts.id, receiptId), eq(receipts.status, 'extracting')))
+          .returning({ id: receipts.id });
+        if (kopf.length === 0) throw new BonNichtMehrOffen(receiptId);
 
         await tx.insert(extractionRuns).values({
           receiptId,
@@ -612,9 +646,15 @@ export function productionDeps(
     },
 
     async markFailed(receiptId, reason, belege) {
-      await db.update(receipts)
+      const getroffen = await db.update(receipts)
         .set({ status: 'failed', failureReason: reason.slice(0, 500) })
-        .where(eq(receipts.id, receiptId));
+        .where(and(eq(receipts.id, receiptId), inArray(receipts.status, ['pending', 'extracting'])))
+        .returning({ id: receipts.id });
+      // Schon fertig (von Hand eingetragen, bestaetigt): kein Fehlschlag, keine Meldung.
+      if (getroffen.length === 0) {
+        console.warn(`[worker] Bon ${receiptId} ist nicht mehr in Bearbeitung, Fehlschlag nicht eingetragen: ${reason.slice(0, 200)}`);
+        return;
+      }
       // provider.id/model aus dem Closure, nicht 'unknown': extraction_runs ist die
       // Grundlage für den Provider-Vergleich in Phase 7, und ein Fehlschlag ist
       // genau die Zeile, deren Provider-Zuordnung am meisten zählt — "welcher

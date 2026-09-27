@@ -69,7 +69,13 @@
 	}
 </script>
 
-<ul class="overflow-hidden rounded-2xl bg-papier shadow-[0_0_0_1px_var(--color-linie)]">
+<!-- `overflow-clip`, nicht `overflow-hidden`: beide schneiden die runden Ecken, aber
+     `hidden` macht die Liste zum Rollbehaelter, und der darf im Raster auf null schrumpfen.
+     Am Schreibtisch (Raster fester Hoehe) schnitt der Browser sie deshalb auf den Restplatz
+     zu — ab etwa acht Positionen fehlte der Rest, und es gab nichts zu rollen (27.09.2026).
+     `min-w-0` behaelt das Schrumpfen in der BREITE bei: am Handy brechen die Zeilen um,
+     statt die Seite breiter als den Bildschirm zu machen. -->
+<ul class="min-w-0 overflow-clip rounded-2xl bg-papier shadow-[0_0_0_1px_var(--color-linie)]">
 	{#each zeilen as zeile, i (schluessel(zeile))}
 		{@const imBild = abweichungen.get(zeile.lineNo)}
 		{@const k = schluessel(zeile)}

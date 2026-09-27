@@ -78,7 +78,9 @@ export const MAX_TOKENS_STRUKTURIERT = 9000;
 export function gruendeFuer(q: OcrQualitaet): string {
   const gruende: string[] = [];
   if (q.anzahlBetraege < 2) gruende.push('zu wenige erkennbare Beträge');
-  if (!q.hatSummenzeile && !q.hatDatum) gruende.push('weder Summenzeile noch Datum gefunden');
+  if (!q.hatSummenzeile && !q.hatDatum && !q.groessterBetragMehrfach) {
+    gruende.push('weder Summenzeile noch Datum noch eine mehrfach gedruckte Endsumme gefunden');
+  }
   if (q.ueberhangGroessterBetrag !== null && q.ueberhangGroessterBetrag > 2) {
     gruende.push(
       'ein einzelner Betrag überragt alle übrigen zusammen um mehr als das Doppelte — ' +
@@ -375,6 +377,13 @@ export function createOcrTextProvider(opts: {
 
       const { items, warnings } = entferneUnbelegtePfandzeilen(geprueft.data.items, text);
       const receipt: ExtractedReceipt = { ...geprueft.data, items };
+      // Steht im gelesenen Text kein Datum, kann das Modell keines gelesen haben — es hat
+      // eines erfunden (Echtbetrieb 27.09.2026: 15.01. statt 18.09.). Ein leeres Feld faellt
+      // beim Pruefen auf, ein erfundenes Datum landet unbemerkt im falschen Monat.
+      if (!qualitaet.hatDatum && receipt.purchasedAt !== null) {
+        receipt.purchasedAt = null;
+        warnings.push('Kaufdatum verworfen: im gelesenen Text steht keines — bitte beim Prüfen eintragen.');
+      }
 
       const servedModel =
         typeof payload.model === 'string' && payload.model.trim() !== ''

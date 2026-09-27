@@ -142,3 +142,33 @@ export function zeileVerschieben(
 	[kopie[index], kopie[ziel]] = [kopie[ziel], kopie[index]];
 	return neuNummerieren(kopie);
 }
+
+/**
+ * Hat jemand an einem fehlgeschlagenen Bon schon etwas eingetragen? Der unberuehrte Stand
+ * ist ein leerer Kopf und die eine leere Zeile, die die Ansicht selbst anlegt. Nur wenn
+ * etwas darueber hinaus da ist, darf „Spaeter" speichern — sonst waere der Bon danach in
+ * Pruefung, und „Erneut lesen" gaebe es fuer ihn nicht mehr.
+ */
+export function handEingabeBegonnen(
+	kopf: {
+		merchantNameRaw: string | null;
+		purchasedAt: string | null;
+		totalGrossCents: number | null;
+		paymentMethod: string | null;
+	},
+	zeilen: EditorZeile[]
+): boolean {
+	const text = (t: string | null) => (t ?? '').trim() !== '';
+	if (text(kopf.merchantNameRaw) || text(kopf.paymentMethod)) return true;
+	if (kopf.purchasedAt !== null || kopf.totalGrossCents !== null) return true;
+	if (zeilen.length > 1) return true;
+	return zeilen.some(
+		(z) =>
+			text(z.rawText) ||
+			z.totalPriceCents !== 0 ||
+			z.categoryId !== null ||
+			text(z.quantity) ||
+			text(z.unit) ||
+			z.unitPriceCents !== null
+	);
+}

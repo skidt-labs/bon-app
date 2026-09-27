@@ -30,6 +30,14 @@ describe('erneutLesen', () => {
 		if (!ergebnis.ok) expect(ergebnis.meldung).toContain('504');
 	});
 
+	// Der Endpunkt antwortet 200, auch wenn das Einreihen scheiterte — dann steht der Bon
+	// wieder auf „fehlgeschlagen" und die Antwort traegt queued:false (reprocess/+server.ts).
+	it('meldet keinen Erfolg, wenn der Bon nicht eingereiht werden konnte', async () => {
+		const fetchImpl = vi.fn(async () => new Response('{"id":"bon-1","queued":false}', { status: 200 }));
+		const ergebnis = await erneutLesen('bon-1', fetchImpl as unknown as typeof fetch);
+		expect(ergebnis.ok).toBe(false);
+	});
+
 	it('faengt einen Netzfehler ab', async () => {
 		const fetchImpl = vi.fn(async () => {
 			throw new TypeError('fetch failed');

@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { asc, count, eq, sql } from 'drizzle-orm';
+import { asc, count, eq, inArray, sql } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { merchants, receipts, receiptItems, users, householdMembers } from '$lib/server/db/schema';
-import { korrekturenSchema, korrekturenAnwenden } from './korrekturen';
+import { korrekturenSchema, korrekturenAnwenden, KorrekturVerfehlt } from './korrekturen';
 
 /**
  * Live-Waechter gegen die LAUFENDE Datenbank — hinter RUN_DB_TESTS=1, nicht Teil der
@@ -85,7 +85,7 @@ describe.skipIf(AUS)('korrekturenAnwenden gegen die echte Datenbank', () => {
 
 		await expect(
 			db.transaction(async (tx) => {
-				await korrekturenAnwenden(tx, bon.id, k, { bestaetigen: true, userId: nutzer.id });
+				await korrekturenAnwenden(tx, bon.id, k, { bestaetigen: true, userId: nutzer.id, ausStatus: kopfVorher.status });
 
 				const nachher = await tx
 					.select()
@@ -135,9 +135,13 @@ describe.skipIf(AUS)('korrekturenAnwenden gegen die echte Datenbank', () => {
 			.select({
 				id: receipts.id,
 				householdId: receipts.householdId,
-				sichtbarkeit: receipts.sichtbarkeit
+				sichtbarkeit: receipts.sichtbarkeit,
+				status: receipts.status
 			})
 			.from(receipts)
+			// Nur ein ausgelesener Bon: ein fehlgeschlagener wuerde beim ersten Speichern zu
+			// `review`, und der zweite Aufruf unten traefe den gelesenen Status nicht mehr.
+			.where(inArray(receipts.status, ['review', 'confirmed']))
 			.limit(1);
 		if (!bon) return;
 		const [nutzer] = await db
@@ -183,7 +187,8 @@ describe.skipIf(AUS)('korrekturenAnwenden gegen die echte Datenbank', () => {
 				await korrekturenAnwenden(tx, bon.id, rumpf(true), {
 					bestaetigen: false,
 					userId: nutzer.id,
-					warBestaetigt: false
+					warBestaetigt: false,
+					ausStatus: bon.status
 				});
 				const [nachher] = await tx
 					.select({
@@ -206,7 +211,8 @@ describe.skipIf(AUS)('korrekturenAnwenden gegen die echte Datenbank', () => {
 				await korrekturenAnwenden(tx, bon.id, rumpf(false), {
 					bestaetigen: false,
 					userId: nutzer.id,
-					warBestaetigt: false
+					warBestaetigt: false,
+					ausStatus: bon.status
 				});
 				const [ohne] = await tx
 					.select({ privatGewuenscht: receipts.privatGewuenscht })
@@ -217,5 +223,99 @@ describe.skipIf(AUS)('korrekturenAnwenden gegen die echte Datenbank', () => {
 				throw new Error('ROLLBACK_ABSICHT');
 			})
 		).rejects.toThrow('ROLLBACK_ABSICHT');
+	});
+
+	/**
+	 * Von Hand eingetragene Fehlschlaege (27.09.2026). Ein Bon mit Positionen wird in der
+	 * Transaktion auf `failed` gestellt — im Bestand gibt es keinen fehlgeschlagenen mit
+	 * Zeilen, und der Wechsel rollt ohnehin zurueck.
+	 */
+	it('macht aus einem fehlgeschlagenen Bon beim Speichern einen Bon in Pruefung und rollt bei falschem Status alles zurueck', async () => {
+		const [bon] = await db
+			.select({ id: receiptItems.receiptId })
+			.from(receiptItems)
+			.groupBy(receiptItems.receiptId)
+			.limit(1);
+		if (!bon) return;
+		const [kopfVorher] = await db.select().from(receipts).where(eq(receipts.id, bon.id));
+		const [nutzer] = await db
+			.select({ id: householdMembers.userId })
+			.from(householdMembers)
+			.where(eq(householdMembers.householdId, kopfVorher.householdId))
+			.limit(1);
+		if (!nutzer) return;
+		const vorher = await db
+			.select()
+			.from(receiptItems)
+			.where(eq(receiptItems.receiptId, bon.id))
+			.orderBy(asc(receiptItems.lineNo));
+		const k = korrekturenSchema.parse({
+			receipt: { merchantNameRaw: 'Handeintrag-Testlauf', purchasedAt: null, totalGrossCents: 100, paymentMethod: null },
+			items: [
+				...vorher.map((z) => ({
+					id: z.id,
+					lineNo: z.lineNo,
+					rawText: z.rawText,
+					lineType: z.lineType,
+					quantity: z.quantity,
+					unit: z.unit,
+					unitPriceCents: z.unitPriceCents,
+					totalPriceCents: z.totalPriceCents,
+					vatClass: z.vatClass,
+					appliesToLine: z.appliesToLine,
+					categoryId: z.categoryId
+				})),
+				{
+					id: null,
+					lineNo: vorher.length + 1,
+					rawText: 'VON HAND',
+					lineType: 'article',
+					quantity: null,
+					unit: null,
+					unitPriceCents: null,
+					totalPriceCents: 42,
+					vatClass: null,
+					appliesToLine: null,
+					categoryId: null
+				}
+			],
+			geloescht: []
+		});
+
+		await expect(
+			db.transaction(async (tx) => {
+				// 1. Der Bon wird inzwischen wieder ausgelesen: nichts darf bleiben.
+				await tx.update(receipts).set({ status: 'pending' }).where(eq(receipts.id, bon.id));
+				await expect(
+					tx.transaction((innen) =>
+						korrekturenAnwenden(innen, bon.id, k, { bestaetigen: false, userId: nutzer.id, ausStatus: 'failed' })
+					)
+				).rejects.toBeInstanceOf(KorrekturVerfehlt);
+				const nachFehlschlag = await tx.select().from(receiptItems).where(eq(receiptItems.receiptId, bon.id));
+				expect(nachFehlschlag).toHaveLength(vorher.length);
+				expect(nachFehlschlag.some((z) => z.rawText === 'VON HAND')).toBe(false);
+
+				// 2. Der Bon ist fehlgeschlagen: Speichern macht ihn zu einem Bon in Pruefung.
+				await tx
+					.update(receipts)
+					.set({ status: 'failed', failureReason: 'Testlauf' })
+					.where(eq(receipts.id, bon.id));
+				await korrekturenAnwenden(tx, bon.id, k, { bestaetigen: false, userId: nutzer.id, ausStatus: 'failed' });
+				const [kopf] = await tx.select().from(receipts).where(eq(receipts.id, bon.id));
+				expect(kopf.status).toBe('review');
+				expect(kopf.failureReason).toBeNull();
+				expect(kopf.confirmedAt).toEqual(kopfVorher.confirmedAt);
+				throw ROLLBACK;
+			})
+		).rejects.toBe(ROLLBACK);
+
+		const danach = await db
+			.select()
+			.from(receiptItems)
+			.where(eq(receiptItems.receiptId, bon.id))
+			.orderBy(asc(receiptItems.lineNo));
+		expect(danach).toEqual(vorher);
+		const [kopfDanach] = await db.select().from(receipts).where(eq(receipts.id, bon.id));
+		expect(kopfDanach).toEqual(kopfVorher);
 	});
 });

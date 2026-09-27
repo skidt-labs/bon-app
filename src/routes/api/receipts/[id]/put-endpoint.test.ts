@@ -23,7 +23,14 @@ const mocks = vi.hoisted(() => ({
 	deleteCalls: [] as { table: unknown }[],
 	// Zeilen, die das naechste .returning() liefert. Leer = Standardfall "eine Zeile
 	// getroffen"; ein vorangestelltes [] stellt den Fall "keine Zeile getroffen" nach.
-	returningRows: [] as unknown[][]
+	returningRows: [] as unknown[][],
+	// Die Doppel-Suche hat eigene Tests gegen die echte Datenbank (bons/doppelt.db.test.ts).
+	original: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null)
+}));
+
+vi.mock('$lib/server/bons/doppelt', () => ({
+	DOPPEL_GRUND: 'moeglicher_doppelbon',
+	originalFuerNeuenBon: mocks.original
 }));
 
 vi.mock('$lib/server/merchants', () => ({ haendlerAufloesen: vi.fn(async () => 'merchant-1') }));
@@ -192,6 +199,52 @@ describe('PUT /api/receipts/[id]', () => {
 		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
 		expect(kopf?.set).not.toHaveProperty('status');
 		expect(kopf?.set).not.toHaveProperty('confirmedAt');
+	});
+
+	/**
+	 * Ein fehlgeschlagener Bon laesst sich von Hand eintragen. Wer dabei „Spaeter" drueckt,
+	 * macht ihn zu einem Bon in Pruefung — sonst ueberschriebe ein spaeteres „Erneut lesen"
+	 * (das nur fehlgeschlagene Bons annimmt) die eingetippten Zeilen.
+	 */
+	it('nimmt einen fehlgeschlagenen Bon an und macht ihn zu einem Bon in Pruefung', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		const response = await PUT(fakeEvent(rumpf()));
+		expect(response.status).toBe(200);
+		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(kopf?.set).toMatchObject({ status: 'review', failureReason: null });
+		expect(kopf?.set).not.toHaveProperty('confirmedAt');
+	});
+
+	it('prueft einen fehlgeschlagenen Bon beim Speichern auf ein schon erfasstes Original', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		mocks.original.mockResolvedValueOnce('r0');
+		const response = await PUT(fakeEvent(rumpf()));
+		expect(response.status).toBe(200);
+		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(kopf?.set).toMatchObject({
+			status: 'review',
+			vermutetesOriginalId: 'r0',
+			needsReviewReason: ['moeglicher_doppelbon']
+		});
+	});
+
+	it('fragt bei einem Bon in Pruefung nicht nach einem Original — das tat schon der Worker', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'review' }];
+		await PUT(fakeEvent(rumpf()));
+		expect(mocks.original).not.toHaveBeenCalled();
+	});
+
+	it('meldet 409, wenn sich der Status zwischen Laden und Schreiben geaendert hat', async () => {
+		// Etwa: jemand drueckt gleichzeitig „Erneut lesen", der Bon steht schon auf pending.
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		mocks.returningRows.push([{ id: ZEILE_A }], []); // die Position trifft, der Kopf nicht
+		let caught: unknown;
+		try {
+			await PUT(fakeEvent(rumpf()));
+		} catch (err) {
+			caught = err;
+		}
+		expect(isHttpError(caught, 409)).toBe(true);
 	});
 
 	it('verweigert einen Bon, der noch gar nicht ausgelesen ist', async () => {

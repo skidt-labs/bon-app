@@ -22,7 +22,14 @@ const mocks = vi.hoisted(() => ({
 	deleteCalls: [] as { table: unknown }[],
 	// Zeilen, die das naechste .returning() liefert. Leer = Standardfall "eine Zeile
 	// getroffen"; ein vorangestelltes [] stellt den Fall "keine Zeile getroffen" nach.
-	returningRows: [] as unknown[][]
+	returningRows: [] as unknown[][],
+	// Die Doppel-Suche hat eigene Tests gegen die echte Datenbank (bons/doppelt.db.test.ts).
+	original: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null)
+}));
+
+vi.mock('$lib/server/bons/doppelt', () => ({
+	DOPPEL_GRUND: 'moeglicher_doppelbon',
+	originalFuerNeuenBon: mocks.original
 }));
 
 vi.mock('$lib/server/merchants', () => ({ haendlerAufloesen: vi.fn(async () => 'merchant-1') }));
@@ -251,6 +258,54 @@ describe('POST /api/receipts/[id]/confirm', () => {
 			merchantNameRaw: 'Frischmarkt',
 			totalGrossCents: 109
 		});
+	});
+
+	it('bestaetigt auch einen fehlgeschlagenen, von Hand eingetragenen Bon', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		const response = await POST(fakeEvent(rumpf()));
+		expect(response.status).toBe(200);
+		const receiptUpdate = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(receiptUpdate?.set).toMatchObject({ status: 'confirmed', confirmedBy: 'user-1', failureReason: null });
+	});
+
+	/**
+	 * Ein angeschnittenes Foto scheitert, der Bon wird neu fotografiert und bestaetigt —
+	 * und spaeter traegt jemand den alten Fehlschlag von Hand ein. Ohne diese Pruefung
+	 * stuende der Einkauf zweimal in den Berichten (Pruefung 27.09.2026).
+	 */
+	it('bestaetigt einen fehlgeschlagenen Bon NICHT, wenn es ihn schon gibt, sondern legt ihn mit Doppel-Hinweis in die Pruefung', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		mocks.original.mockResolvedValueOnce('r0');
+		const response = await POST(fakeEvent(rumpf([zeile()], { receipt: { ...rumpf().receipt, purchasedAt: '2026-09-20T10:00:00' } })));
+		expect(response.status).toBe(200);
+		await expect(response.json()).resolves.toEqual({ ok: true, doppelt: true });
+		const set = mocks.updateCalls.find((c) => c.table === receipts)?.set as Record<string, unknown>;
+		expect(set).toMatchObject({ status: 'review', vermutetesOriginalId: 'r0', needsReviewReason: ['moeglicher_doppelbon'] });
+		expect(set).not.toHaveProperty('confirmedAt');
+	});
+
+	it('verlangt bei einem fehlgeschlagenen Bon eine Endsumme', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		let caught: unknown;
+		try {
+			await POST(fakeEvent(rumpf([zeile()], { receipt: { ...rumpf().receipt, totalGrossCents: null } })));
+		} catch (err) {
+			caught = err;
+		}
+		expect(isHttpError(caught, 400)).toBe(true);
+		expect(mocks.updateCalls).toHaveLength(0);
+	});
+
+	it('meldet 409 und bestaetigt NICHT, wenn der Bon inzwischen wieder ausgelesen wird', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		mocks.returningRows.push([{ id: ZEILE_A }], []); // die Position trifft, der Kopf nicht
+		let caught: unknown;
+		try {
+			await POST(fakeEvent(rumpf()));
+		} catch (err) {
+			caught = err;
+		}
+		expect(isHttpError(caught, 409)).toBe(true);
 	});
 
 	it('legt eine neue Zeile (id null) an und markiert sie als korrigiert', async () => {

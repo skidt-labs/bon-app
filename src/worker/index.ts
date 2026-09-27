@@ -1,4 +1,6 @@
-import { getBoss, QUEUE_EXTRACT, type ExtractJob } from '$lib/server/queue/boss';
+import { getBoss, QUEUE_EXTRACT, QUEUE_PAPIERKORB, type ExtractJob } from '$lib/server/queue/boss';
+import { db } from '$lib/server/db';
+import { papierkorbLeeren } from '$lib/server/bons/papierkorb';
 import { aktuellerProvider, wechselnderProvider } from '$lib/server/ki/aktiv';
 import { handleExtractJobs, productionDeps, assertBatchSizeOne, istVoruebergehenderFehler } from './extract-receipt';
 import { notifyMatrix } from '$lib/server/notify';
@@ -56,6 +58,14 @@ await boss.work<ExtractJob>(
     }
   }
 );
+
+// Der Papierkorb leert sich selbst. schedule() ist idempotent: ein Neustart schreibt denselben
+// Zeitplan neu, es entsteht kein zweiter.
+await boss.schedule(QUEUE_PAPIERKORB, '30 4 * * *', null, { tz: 'Europe/Berlin' });
+await boss.work(QUEUE_PAPIERKORB, async () => {
+  const n = await papierkorbLeeren(db, new Date());
+  if (n > 0) console.log(`[worker] Papierkorb: ${n} Bon(s) nach 30 Tagen endgültig gelöscht`);
+});
 
 // Die OCR-Engine steht bewusst MIT in dieser Zeile. Bis zum 2026-09-16 meldete der
 // Worker nur den Extraktions-Anbieter — nach dem Umstellen auf PaddleOCR liess sich der

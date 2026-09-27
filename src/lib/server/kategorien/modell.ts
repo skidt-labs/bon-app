@@ -141,6 +141,42 @@ export async function ordneMitModell(
 	return { vorschlaege, verworfen, fehler: null, usage };
 }
 
+function summe(a: ExtractionUsage, b: ExtractionUsage): ExtractionUsage {
+	if (a === null) return b;
+	if (b === null) return a;
+	return { inputTokens: a.inputTokens + b.inputTokens, outputTokens: a.outputTokens + b.outputTokens };
+}
+
+/**
+ * Wie ordneMitModell, aber Zeilen ohne gueltigen Vorschlag (uebersprungen oder mit erfundener
+ * Kategorie) werden EIN zweites Mal gefragt — nur sie. Gemessen am 27.09.2026: von 13
+ * unsortierten Positionen hatte das Modell 10 gar nicht beantwortet. Was es ausdruecklich
+ * „sonstiges-unsortiert" nannte, ist eine Antwort und wird nicht nachgefragt. Scheitert schon
+ * der erste Aufruf, gibt es keinen zweiten; scheitert der zweite, bleibt die erste Antwort.
+ */
+export async function ordneMitNachfrage(zeilen: ZuOrdnendeZeile[], deps: ModellDeps): Promise<ModellErgebnis> {
+	const erst = await ordneMitModell(zeilen, deps);
+	if (erst.fehler !== null) return erst;
+	const offen = zeilen.filter((z) => !(z.id in erst.vorschlaege));
+	if (offen.length === 0) return erst;
+	let zweit: ModellErgebnis;
+	try {
+		zweit = await ordneMitModell(offen, deps);
+	} catch (err) {
+		return { ...erst, fehler: `Nachfrage fehlgeschlagen: ${err instanceof Error ? err.message : String(err)}` };
+	}
+	return {
+		vorschlaege: { ...erst.vorschlaege, ...zweit.vorschlaege },
+		// Ein erfundener Slug bleibt im Protokoll, solange seine Zeile keinen gueltigen hat.
+		verworfen: [
+			...erst.verworfen.filter((v) => !(v.itemId in zweit.vorschlaege)),
+			...zweit.verworfen.filter((v) => !(v.itemId in erst.vorschlaege))
+		],
+		fehler: zweit.fehler === null ? null : `Nachfrage: ${zweit.fehler}`,
+		usage: summe(erst.usage, zweit.usage)
+	};
+}
+
 /**
  * Der echte Modellaufruf — an DIESELBE Adresse, an die schon die Auslesung geht
  * (EXTRACTION_BASE_URL). Das ist der MLX-Server auf eigener Hardware; Bontext verlaesst

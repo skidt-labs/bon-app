@@ -6,6 +6,7 @@ import { ZEILENARTEN } from '$lib/bons/zeilenarten';
 import { haendlerAufloesen } from '$lib/server/merchants';
 import { lerneAusKorrektur } from '$lib/server/kategorien/lernen';
 import { parseBonZeit } from '$lib/server/zeit';
+import { DOPPEL_GRUND, originalFuerNeuenBon } from '$lib/server/bons/doppelt';
 
 /**
  * Der Vertrag, mit dem ein Mensch einen Bon korrigiert. Zwei Endpunkte teilen ihn:
@@ -178,7 +179,20 @@ export async function korrekturenAnwenden(
 	tx: Tx,
 	receiptId: string,
 	k: Korrekturen,
-	opts: { bestaetigen: boolean; userId: string; warBestaetigt?: boolean }
+	opts: {
+		bestaetigen: boolean;
+		userId: string;
+		warBestaetigt?: boolean;
+		/**
+		 * Der Status, den der Aufrufer gelesen und geprueft hat. Der Kopf wird nur
+		 * geschrieben, solange der Bon ihn noch traegt — sonst KorrekturVerfehlt. Noetig,
+		 * seit auch fehlgeschlagene Bons hier ankommen: ein gleichzeitiges „Erneut lesen"
+		 * setzt sie auf pending, und der Worker ueberschriebe danach die eingetippten Zeilen.
+		 */
+		ausStatus: (typeof receipts.$inferSelect)['status'];
+		/** Vermutetes Original (originalBeimEintragen). Gesetzt: Doppel-Hinweis statt Bestaetigung. */
+		doppelVon?: string | null;
+	}
 ): Promise<Gelerntes[]> {
 	/**
 	 * Was ein Mensch neu einsortiert hat. Wird NICHT hier gelernt, sondern zurueckgegeben
@@ -291,7 +305,10 @@ export async function korrekturenAnwenden(
 	}
 
 	const merchantId = await haendlerAufloesen(k.receipt.merchantNameRaw, tx);
-	await tx
+	// Ein von Hand eingetragener, vorher fehlgeschlagener Bon: beim Bestaetigen bestaetigt,
+	// beim blossen Speichern ein Bon in Pruefung. Der alte Fehlergrund stimmt dann nicht mehr.
+	const ausFehlschlag = opts.ausStatus === 'failed';
+	const kopfGetroffen = await tx
 		.update(receipts)
 		.set({
 			merchantId,
@@ -301,7 +318,11 @@ export async function korrekturenAnwenden(
 			paymentMethod: k.receipt.paymentMethod,
 			...(opts.bestaetigen
 				? { status: 'confirmed' as const, confirmedAt: new Date(), confirmedBy: opts.userId }
-				: {}),
+				: ausFehlschlag
+					? { status: 'review' as const }
+					: {}),
+			...(ausFehlschlag ? { failureReason: null } : {}),
+			...(opts.doppelVon ? { vermutetesOriginalId: opts.doppelVon, needsReviewReason: [DOPPEL_GRUND] } : {}),
 			/**
 			 * Die Sichtbarkeit folgt dem Schalter — aber nur in zwei Faellen:
 			 *
@@ -329,9 +350,36 @@ export async function korrekturenAnwenden(
 			 */
 			privatGewuenscht: k.receipt.privatBehalten
 		})
-		.where(eq(receipts.id, receiptId));
+		.where(and(eq(receipts.id, receiptId), eq(receipts.status, opts.ausStatus)))
+		.returning({ id: receipts.id });
+	if (kopfGetroffen.length !== 1) {
+		throw new KorrekturVerfehlt('Der Bon hat sich zwischen Laden und Speichern geändert.');
+	}
 
 	return gelernt;
+}
+
+/**
+ * Doppel-Pruefung fuer einen von Hand eingetragenen Fehlschlag. Beim ausgelesenen Bon
+ * hat das der Worker erledigt; ein fehlgeschlagener hatte keine Summe und war deshalb nie
+ * Kandidat (bons/doppelt.ts). Genau er ist aber oft das erste, angeschnittene Foto eines
+ * Bons, der danach noch einmal fotografiert und bestaetigt wurde.
+ *
+ * VOR der Transaktion und wirft nie: wie beim Worker faellt bei einem Fehler nur der
+ * Hinweis weg, der Bon wird deshalb nicht abgewiesen.
+ */
+export async function originalBeimEintragen(
+	receipt: { id: string; status: string },
+	k: Korrekturen
+): Promise<string | null> {
+	if (receipt.status !== 'failed') return null;
+	try {
+		return await originalFuerNeuenBon(db, receipt.id, parseBonZeit(k.receipt.purchasedAt), k.receipt.totalGrossCents);
+	} catch (err) {
+		const meldung = err instanceof Error ? err.message : String(err);
+		console.error(`[korrekturen] Doppel-Suche für Bon ${receipt.id} fehlgeschlagen, Bon läuft ohne Hinweis weiter: ${meldung}`);
+		return null;
+	}
 }
 
 /**

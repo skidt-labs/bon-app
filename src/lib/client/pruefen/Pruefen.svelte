@@ -4,6 +4,9 @@
 	import { describeProblem, DOPPEL_GRUND } from '$lib/bons/beanstandungen';
 	import { formatWann } from '$lib/bons/anzeige';
 	import Symbol from '$lib/client/geruest/Symbol.svelte';
+	import { erneutLesen } from '$lib/client/bons/erneutLesen';
+	import { papierkorbAktion } from '$lib/client/bons/papierkorb';
+	import { restTage } from '$lib/bons/papierkorb';
 	import Bonbild from './Bonbild.svelte';
 	import Bildstreifen from './Bildstreifen.svelte';
 	import Vollbild from './Vollbild.svelte';
@@ -17,6 +20,7 @@
 		zeileVerschieben,
 		positionssumme,
 		pruefeVorBestaetigen,
+		handEingabeBegonnen,
 		type EditorZeile
 	} from './editor';
 	import type { OcrZeileKurz } from '$lib/server/ocr/anbieter';
@@ -37,6 +41,9 @@
 				privatGewuenscht: boolean | null;
 				needsReviewReason: string[] | null;
 				vermutetesOriginalId: string | null;
+				failureReason: string | null;
+				/** Seit wann im Papierkorb — null ausserhalb. */
+				verworfenAm: string | Date | null;
 			};
 			/** Das vermutete Original, sofern sichtbar — siehe bons/doppelt.ts. */
 			original: {
@@ -44,11 +51,14 @@
 				merchantNameRaw: string | null;
 				purchasedAt: string | Date | null;
 				totalGrossCents: number | null;
+				status: string;
 			} | null;
 			items: EditorZeile[];
 			ocrZeilen: OcrZeileKurz[] | null;
 			kategorien: { id: string; name: string; oberName: string | null }[];
 			stapel: Stapel;
+			/** Hochgeladen oder Verwalter: darf verwerfen, zurueckholen, endgueltig loeschen. */
+			darfVerwerfen: boolean;
 		};
 	} = $props();
 
@@ -85,7 +95,13 @@
 	let entriegelt = $state(false);
 	/** Als Doppel verworfen: nur noch ansehen und wiederherstellen, nichts bearbeiten. */
 	const verworfen = $derived(data.receipt.status === 'doppelt');
-	const offen = $derived(!verworfen && (!bestaetigt || entriegelt));
+	/** Im Papierkorb: nur ansehen, zurueckholen oder endgueltig loeschen. */
+	const imPapierkorb = $derived(data.receipt.status === 'verworfen');
+	/** Das vermutete Original liegt im Papierkorb — der Doppel-Hinweis muss das sagen. */
+	const originalImPapierkorb = $derived(data.original?.status === 'verworfen');
+	const offen = $derived(!verworfen && !imPapierkorb && (!bestaetigt || entriegelt));
+	/** Welche Rueckfrage gerade offen ist — in der Seite, weil confirm() hier nicht taugt. */
+	let rueckfrage = $state<null | 'verwerfen' | 'loeschen'>(null);
 	/**
 	 * Der Doppel-Hinweis ist offen, solange niemand „doppelt" oder „eigener Einkauf" gesagt
 	 * hat. Bis dahin sperrt der Server das Bestaetigen (confirm/+server.ts) — die Ansicht
@@ -96,7 +112,12 @@
 	$effect(() => {
 		if (angezeigt === data.receipt.id) return;
 		angezeigt = data.receipt.id;
-		zeilen = data.items.map((i) => ({ ...i }));
+		// Ein fehlgeschlagener Bon hat keine Positionen, bestaetigen braucht aber eine:
+		// die erste leere Zeile steht schon da, damit man gleich lostippen kann.
+		zeilen =
+			data.receipt.status === 'failed' && data.items.length === 0
+				? zeileEinfuegen([], -1)
+				: data.items.map((i) => ({ ...i }));
 		const d = data.receipt.purchasedAt;
 		kopf = {
 			merchantNameRaw: data.receipt.merchantNameRaw,
@@ -144,8 +165,15 @@
 					`Der Betrag in ${ungueltigeZeilen.length === 1 ? 'Zeile' : 'den Zeilen'} ${ungueltigeZeilen.join(', ')} ist nicht lesbar.`
 				]
 			: []),
-		...(summeUngueltig ? ['Die Endsumme ist nicht lesbar.'] : [])
+		...(summeUngueltig ? ['Die Endsumme ist nicht lesbar.'] : []),
+		// Beim gelesenen Bon meldet der Worker eine fehlende Summe; beim von Hand
+		// eingetragenen stuende er sonst mit 0 EUR in den Berichten.
+		...(data.receipt.status === 'failed' && kopf.totalGrossCents === null && !summeUngueltig
+			? ['Bitte die Endsumme eintragen.']
+			: [])
 	]);
+	/** Nur bei einem fehlgeschlagenen Bon von Belang: steht schon etwas Eigenes da? */
+	const begonnen = $derived(handEingabeBegonnen(kopf, zeilen));
 
 	function waehlen(i: number) {
 		gewaehlt = i;
@@ -163,7 +191,8 @@
 		gewaehlt = i >= 0 ? i : null;
 	}
 
-	async function senden(bestaetigen: boolean): Promise<boolean> {
+	/** null: nicht gespeichert (die Meldung steht in `meldung`). */
+	async function senden(bestaetigen: boolean): Promise<{ doppelt: boolean } | null> {
 		busy = true;
 		meldung = '';
 		try {
@@ -201,13 +230,16 @@
 					/* kein JSON — der Statussatz bleibt */
 				}
 				meldung = satz;
-				return false;
+				return null;
 			}
 			geloescht = [];
-			return true;
+			// Ein von Hand eingetragener Fehlschlag kann sich als Doppel herausstellen: dann
+			// ist er gespeichert, aber NICHT bestaetigt (confirm/+server.ts).
+			const antwort = (await res.json().catch(() => null)) as { doppelt?: unknown } | null;
+			return { doppelt: antwort?.doppelt === true };
 		} catch {
 			meldung = 'Keine Verbindung — bitte später noch einmal versuchen.';
-			return false;
+			return null;
 		} finally {
 			busy = false;
 		}
@@ -223,6 +255,12 @@
 	}
 
 	async function spaeter() {
+		// Unberuehrter Fehlschlag: nichts senden. Gespeichert waere er ein Bon in Pruefung,
+		// und „Erneut lesen" gaebe es fuer ihn nicht mehr.
+		if (data.receipt.status === 'failed' && !begonnen) {
+			await weiter(false);
+			return;
+		}
 		if (!(await senden(false))) return;
 		await weiter(false);
 	}
@@ -278,6 +316,48 @@
 		await invalidateAll();
 	}
 
+	/**
+	 * Ein fehlgeschlagener Bon: noch einmal auslesen lassen statt von Hand eintragen —
+	 * etwa, wenn nur der Mac gerade nicht erreichbar war. Danach steht er wieder in der
+	 * Warteschlange, hier gibt es nichts mehr zu tun.
+	 */
+	async function nochmalLesen() {
+		if (begonnen && !confirm('Was du schon eingetragen hast, geht dabei verloren. Trotzdem neu lesen?')) return;
+		busy = true;
+		meldung = '';
+		const ergebnis = await erneutLesen(data.receipt.id);
+		busy = false;
+		if (!ergebnis.ok) {
+			meldung = ergebnis.meldung;
+			return;
+		}
+		await goto('/inbox');
+	}
+
+	/**
+	 * Papierkorb (bons/papierkorb.ts). Verwerfen fuehrt weiter wie Bestaetigen — der Bon ist
+	 * aus dem Stapel —, Loeschen in den Papierkorb der Bonliste, Zurueckholen laedt neu.
+	 */
+	async function papierkorb(aktion: 'verwerfen' | 'wiederherstellen' | 'loeschen') {
+		busy = true;
+		meldung = '';
+		const r = await papierkorbAktion(
+			data.receipt.id,
+			aktion,
+			aktion === 'verwerfen' ? { bestaetigtWegnehmen: bestaetigt } : {}
+		);
+		busy = false;
+		rueckfrage = null;
+		if (!r.ok) {
+			meldung = r.meldung;
+			return;
+		}
+		if (aktion === 'verwerfen') return weiter(true);
+		if (aktion === 'loeschen') return goto('/receipts?status=papierkorb');
+		angezeigt = '';
+		await invalidateAll();
+	}
+
 	async function bestaetigen() {
 		if (doppelOffen) {
 			meldung = 'Erst entscheiden: doppelt oder eigener Einkauf.';
@@ -287,7 +367,14 @@
 			meldung = sperren[0];
 			return;
 		}
-		if (!(await senden(true))) return;
+		const ergebnis = await senden(true);
+		if (!ergebnis) return;
+		if (ergebnis.doppelt) {
+			// Nicht weiter: neu laden, dann steht hier das Doppel-Band mit dem Original.
+			angezeigt = '';
+			await invalidateAll();
+			return;
+		}
 		await weiter(true);
 	}
 </script>
@@ -301,7 +388,23 @@
 -->
 {#snippet aktionen(klasse: string)}
 	<div class="flex items-center gap-2 {klasse}">
-		{#if verworfen}
+		{#if imPapierkorb}
+			<span class="mr-auto text-[12.5px] font-semibold text-gedaempft lg:mr-0">Im Papierkorb</span>
+			{#if data.darfVerwerfen}
+				<button
+					type="button"
+					class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold text-rot-dunkel disabled:opacity-60"
+					disabled={busy}
+					onclick={() => (rueckfrage = 'loeschen')}>Jetzt löschen</button
+				>
+				<button
+					type="button"
+					class="rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+					disabled={busy}
+					onclick={() => papierkorb('wiederherstellen')}>Wiederherstellen</button
+				>
+			{/if}
+		{:else if verworfen}
 			<span class="mr-auto text-[12.5px] font-semibold text-gedaempft lg:mr-0">Als doppelt verworfen</span>
 			<button
 				type="button"
@@ -427,6 +530,14 @@
 		{:else}
 			<span class="ml-auto hidden lg:block"></span>
 		{/if}
+		{#if data.darfVerwerfen && !imPapierkorb}
+			<button
+				type="button"
+				class="shrink-0 rounded-xl border border-linie bg-papier px-3 py-1.5 text-[13px] font-bold text-rot-dunkel disabled:opacity-60"
+				disabled={busy}
+				onclick={() => (rueckfrage = 'verwerfen')}>Verwerfen</button
+			>
+		{/if}
 		{@render aktionen('hidden lg:flex')}
 	</header>
 
@@ -450,11 +561,45 @@
 			/>
 		</aside>
 
+		<!-- `content-start` statt fester Zeilenaufteilung: bis zum 27.09.2026 stand hier
+		     `grid-rows-[auto_auto_1fr_auto]`, und die dehnbare Zeile war die DRITTE — egal,
+		     was dort landete. Mit einem Hinweisband darueber war das nicht mehr die
+		     Positionsliste, sondern das Band, und es wuchs auf die halbe Hoehe. -->
 		<main
-			class="grid gap-3.5 px-4 py-4 pb-28 lg:min-h-0 lg:grid-rows-[auto_auto_1fr_auto] lg:overflow-y-auto lg:px-6 lg:pb-4"
+			class="grid gap-3.5 px-4 py-4 pb-28 lg:min-h-0 lg:content-start lg:overflow-y-auto lg:px-6 lg:pb-4"
 		>
 			<!-- `display: contents`, damit das fieldset nichts am Aufbau aendert — es dient
 			     allein dazu, ALLE Felder darin auf einmal zu sperren. -->
+			{#if imPapierkorb && data.receipt.verworfenAm}
+				<div class="rounded-xl border border-linie bg-chip px-3.5 py-3 text-[13px] font-semibold text-gedaempft">
+					Im Papierkorb. Wird in {restTage(data.receipt.verworfenAm, new Date())} Tagen endgültig gelöscht, wenn du
+					ihn nicht wiederherstellst.
+				</div>
+			{/if}
+
+			{#if data.receipt.status === 'failed'}
+				<!-- Das Auslesen ging schief, das Bild ist trotzdem da (27.09.2026): entweder von
+				     Hand eintragen — die Felder darunter sind offen — oder noch einmal lesen. -->
+				<div class="grid gap-2.5 rounded-xl border border-rot bg-rot-flaeche px-3.5 py-3 text-[13px] text-rot-dunkel">
+					<p>
+						<b class="block font-extrabold">Auslesen fehlgeschlagen{data.receipt.failureReason ? ':' : '.'}</b>
+						{#if data.receipt.failureReason}<span class="block">{data.receipt.failureReason}</span>{/if}
+						<span class="mt-1 block font-semibold">
+							Trag den Bon von Hand ein — Händler, Datum, Endsumme und mindestens eine Position — oder lass ihn
+							noch einmal lesen.
+						</span>
+					</p>
+					<div class="flex flex-wrap gap-2">
+						<button
+							type="button"
+							class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold text-tinte disabled:opacity-60"
+							disabled={busy}
+							onclick={nochmalLesen}>Erneut lesen</button
+						>
+					</div>
+				</div>
+			{/if}
+
 			{#if doppelOffen}
 				<!-- Das Original zum Anklicken: erst vergleichen, dann entscheiden. -->
 				<div class="grid gap-2.5 rounded-xl border border-bernstein bg-bernstein-flaeche px-3.5 py-3 text-[13px]">
@@ -465,21 +610,40 @@
 								{formatWann(data.original.purchasedAt)} · {data.original.merchantNameRaw ?? 'Unbekannter Händler'}
 								· {data.original.totalGrossCents !== null ? `${formatCents(data.original.totalGrossCents)} €` : '—'}</a
 							>
+							{#if originalImPapierkorb}
+								<b class="font-extrabold">— der liegt im Papierkorb.</b> Soll dieser hier bleiben, ist „Eigener Einkauf“ richtig.
+							{/if}
 						{:else}
 							Sieht aus wie ein schon erfasster Bon.
 						{/if}
 						Gleiche Endsumme, fast gleiche Uhrzeit.
 					</p>
-					<div class="flex flex-wrap gap-2">
+					<!-- Liegt das Original im Papierkorb, steht „Eigener Einkauf" vorn: sonst zaehlten
+					     am Ende weder das Original noch dieser Bon (Pruefung 27.09.2026). -->
+					<div class="flex flex-wrap gap-2" class:flex-row-reverse={originalImPapierkorb} class:justify-end={originalImPapierkorb}>
 						<button
 							type="button"
-							class="rounded-xl bg-bernstein px-3.5 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+							class="rounded-xl px-3.5 py-2 text-sm disabled:opacity-60"
+							class:bg-bernstein={!originalImPapierkorb}
+							class:text-white={!originalImPapierkorb}
+							class:font-extrabold={!originalImPapierkorb}
+							class:border={originalImPapierkorb}
+							class:border-linie={originalImPapierkorb}
+							class:bg-papier={originalImPapierkorb}
+							class:font-bold={originalImPapierkorb}
 							disabled={busy}
 							onclick={() => doppelEntscheiden('doppelt')}>Ist doppelt – verwerfen</button
 						>
 						<button
 							type="button"
-							class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold disabled:opacity-60"
+							class="rounded-xl px-3.5 py-2 text-sm disabled:opacity-60"
+							class:border={!originalImPapierkorb}
+							class:border-linie={!originalImPapierkorb}
+							class:bg-papier={!originalImPapierkorb}
+							class:font-bold={!originalImPapierkorb}
+							class:bg-bernstein={originalImPapierkorb}
+							class:text-white={originalImPapierkorb}
+							class:font-extrabold={originalImPapierkorb}
 							disabled={busy}
 							onclick={() => doppelEntscheiden('eigenerEinkauf')}>Eigener Einkauf</button
 						>
@@ -572,6 +736,48 @@
 		{@render aktionen('')}
 	</div>
 </div>
+
+{#if rueckfrage}
+	<div
+		class="fixed inset-0 z-50 grid place-items-center bg-tinte/40 px-4"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="rueckfrage-titel"
+	>
+		<div class="grid w-full max-w-sm gap-3 rounded-2xl bg-papier p-5 text-[14px]">
+			<b id="rueckfrage-titel" class="text-[16px] font-extrabold">
+				{rueckfrage === 'verwerfen' ? 'Bon in den Papierkorb legen?' : 'Bon endgültig löschen?'}
+			</b>
+			<p class="text-gedaempft">
+				{#if rueckfrage === 'loeschen'}
+					Bild und Daten sind danach weg. Das lässt sich nicht rückgängig machen.
+				{:else if bestaetigt}
+					Dieser Bon ist bestätigt. Im Papierkorb zählt er nicht mehr in Berichten und Budgets. 30 Tage lang kannst
+					du ihn wiederherstellen.
+				{:else}
+					30 Tage lang kannst du ihn wiederherstellen, danach wird er gelöscht.
+				{/if}
+			</p>
+			<div class="flex justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold"
+					onclick={() => (rueckfrage = null)}>Abbrechen</button
+				>
+				<button
+					type="button"
+					class="rounded-xl bg-rot-dunkel px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+					disabled={busy}
+					onclick={() => papierkorb(rueckfrage === 'loeschen' ? 'loeschen' : 'verwerfen')}
+				>
+					{rueckfrage === 'loeschen' ? 'Löschen' : 'In den Papierkorb'}
+				</button>
+			</div>
+		</div>
+	</div>
+{/if}
+
+<svelte:window onkeydown={(e) => e.key === 'Escape' && rueckfrage !== null && (rueckfrage = null)} />
 
 {#if vollbild}
 	<Vollbild
