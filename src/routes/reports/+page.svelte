@@ -5,6 +5,7 @@
 	import Filterwahl from '$lib/client/berichte/Filterwahl.svelte';
 	import Gespeichert from '$lib/client/berichte/Gespeichert.svelte';
 	import Export from '$lib/client/berichte/Export.svelte';
+	import Mehr from '$lib/client/berichte/Mehr.svelte';
 	import { filterAlsAdresse, hatFilter, wirktAufPositionen } from '$lib/berichte/filter';
 	import { formatCents } from '$lib/money';
 	import { adresse, leerText, monatImZeitraum, vergleichText, zeitraumName } from '$lib/berichte/zeitleiste';
@@ -38,6 +39,7 @@
 <Seite titel="Berichte" untertitel={name} haushalt={data.haushalt} nutzer={data.user?.displayName ?? null}>
 	{#snippet aktion()}
 		<Export filter={data.filter} matrix={data.matrix} />
+		<Mehr gespeicherte={data.gespeicherte} aktivId={data.aktiv?.id ?? null} filter={data.filter} matrix={data.matrix} />
 	{/snippet}
 
 	<Gespeichert gespeicherte={data.gespeicherte} aktiv={data.aktiv} filter={data.filter} fehler={form?.grund ?? null} />

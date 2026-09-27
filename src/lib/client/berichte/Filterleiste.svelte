@@ -2,6 +2,7 @@
 	import { adresse } from '$lib/berichte/zeitleiste';
 	import { MERKMALE, ohneFilter, ohneMerkmal, type BerichtFilter } from '$lib/berichte/filter';
 	import { aktiveMerkmale, merkmalText, MERKMAL_NAME, type FilterNamen } from '$lib/berichte/merkmale';
+	import Aufklapper from './Aufklapper.svelte';
 
 	let {
 		filter,
@@ -31,15 +32,26 @@
 		</span>
 	{/each}
 	{#if mitAuswahl}
-		<details class="shrink-0">
-			<summary class="cursor-pointer list-none rounded-full border border-linie bg-papier px-3 py-1.5 whitespace-nowrap [&::-webkit-details-marker]:hidden">+ Filter</summary>
-			<!-- fixed am Handy: die waagerecht scrollende Zeile wuerde ein absolut gesetztes Menue abschneiden. -->
-			<ul class="fixed inset-x-4 bottom-4 z-40 grid gap-0.5 rounded-2xl bg-papier p-2 font-semibold shadow-[0_8px_30px_rgba(17,26,59,0.18)] sm:absolute sm:inset-x-auto sm:bottom-auto sm:mt-2 sm:w-52">
+		<!-- Am Handy ein Blatt von unten (fixed): die waagerecht scrollende Zeile wuerde ein
+		     absolut gesetztes Menue abschneiden. -->
+		<Aufklapper
+			titel="Filter hinzufügen"
+			klasse="relative shrink-0"
+			breite="sm:w-52"
+			knopfKlasse="block rounded-full border border-linie bg-papier px-3 py-1.5 whitespace-nowrap"
+		>
+			{#snippet knopf()}+ Filter{/snippet}
+			<ul class="grid gap-0.5 font-semibold">
 				{#each MERKMALE as m (m)}
-					<li><a href={link(filter, { wahl: m })} class="block rounded-lg px-3 py-2 hover:bg-chip">{MERKMAL_NAME[m]}</a></li>
+					<li>
+						<a href={link(filter, { wahl: m })} class="flex min-h-11 items-center justify-between gap-3 rounded-lg px-3 py-2.5 hover:bg-chip">
+							<span>{MERKMAL_NAME[m]}</span>
+							{#if aktiv.includes(m)}<span class="truncate text-[12px] font-semibold text-gedaempft">gesetzt</span>{/if}
+						</a>
+					</li>
 				{/each}
 			</ul>
-		</details>
+		</Aufklapper>
 	{/if}
 	{#if aktiv.length > 0}
 		<a href={link(ohneFilter(filter))} class="shrink-0 px-2 py-1.5 whitespace-nowrap text-tuerkis-dunkel">Alle entfernen</a>

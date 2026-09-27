@@ -40,13 +40,15 @@
 	const feld = 'rounded-xl border border-linie px-3 py-2 font-normal';
 </script>
 
+<!-- Nur am Handy: Seite abdunkeln; Tippen daneben schliesst (derselbe Link wie ✕). -->
+<a href={schliessen} class="fixed inset-0 z-40 bg-tinte/40 sm:hidden" aria-hidden="true" tabindex="-1"></a>
 <section
-	class="fixed inset-x-0 bottom-0 z-40 max-h-[85vh] overflow-y-auto rounded-t-2xl bg-papier p-4 shadow-[0_-8px_30px_rgba(17,26,59,0.18)] sm:static sm:mb-4 sm:max-h-none sm:rounded-2xl sm:shadow-[0_0_0_1px_var(--color-linie)]"
+	class="fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-y-auto overscroll-contain rounded-t-2xl bg-papier p-4 shadow-[0_-8px_30px_rgba(17,26,59,0.18)] sm:static sm:mb-4 sm:max-h-none sm:rounded-2xl sm:shadow-[0_0_0_1px_var(--color-linie)]"
 	aria-label="Filter {MERKMAL_NAME[wahl]}"
 >
 	<div class="mb-3 flex items-center justify-between">
 		<h2 class="text-[15px] font-extrabold">Filter: {MERKMAL_NAME[wahl]}</h2>
-		<a href={schliessen} class="text-[13px] font-bold text-tuerkis-dunkel">Schließen</a>
+		<a href={schliessen} aria-label="Schließen" class="grid h-11 w-11 place-items-center rounded-full border border-linie text-[15px]">✕</a>
 	</div>
 	<form
 		method="GET"

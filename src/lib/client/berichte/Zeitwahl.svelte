@@ -3,6 +3,7 @@
 	import { adresse, jahresAuswahl, zeitraumName, zeitwahlKacheln } from '$lib/berichte/zeitleiste';
 	import { jahrVon, monatVon } from '$lib/berichte/kalender';
 	import { formatCents } from '$lib/money';
+	import Aufklapper from './Aufklapper.svelte';
 
 	let {
 		filter,
@@ -28,22 +29,20 @@
 	);
 	const kacheln = $derived(zeitwahlKacheln(jahr, heute, monatsSummen));
 	const link = (f: BerichtFilter) => adresse(pfad, f, zusatz);
-	let offen = $state(false);
 </script>
 
-<!-- <details> statt eigenem Aufklappen: funktioniert ohne JavaScript, Tastatur inklusive.
-     Am Handy ist der Inhalt ein Blatt von unten, am Rechner ein Feld unter dem Knopf. -->
-<details class="relative min-w-0" bind:open={offen}>
-	<summary
-		class="flex h-11 cursor-pointer list-none items-center justify-center gap-1.5 rounded-full bg-tinte px-3 text-white [&::-webkit-details-marker]:hidden"
-		aria-label="Zeitraum wählen: {zeitraumName(z)}"
-	>
+<!-- Am Handy ein Blatt von unten, am Rechner ein Feld unter dem Knopf (Aufklapper). -->
+<Aufklapper
+	titel="Zeitraum wählen"
+	klasse="relative min-w-0"
+	ausrichtung="mitte"
+	label="Zeitraum wählen: {zeitraumName(z)}"
+	knopfKlasse="flex h-11 items-center justify-center gap-1.5 rounded-full bg-tinte px-3 text-white"
+>
+	{#snippet knopf()}
 		<span class="truncate whitespace-nowrap tabular-nums">{zeitraumName(z)}</span>
 		<span aria-hidden="true">▾</span>
-	</summary>
-	<div
-		class="fixed inset-x-0 bottom-0 z-40 max-h-[80vh] overflow-y-auto rounded-t-2xl bg-papier p-4 font-normal shadow-[0_-8px_30px_rgba(17,26,59,0.18)] sm:absolute sm:inset-x-auto sm:bottom-auto sm:left-1/2 sm:top-full sm:mt-2 sm:w-[320px] sm:-translate-x-1/2 sm:rounded-2xl sm:shadow-[0_8px_30px_rgba(17,26,59,0.18)]"
-	>
+	{/snippet}
 		{#if z.art === 'spanne'}
 			<form method="GET" action={pfad} class="grid gap-3 text-[13px]">
 				<input type="hidden" name="zeitraum" value="spanne" />
@@ -117,8 +116,4 @@
 				<a href={link({ ...filter, zeitraum: { art: 'jahr', jahr } })}>Ganzes Jahr {jahr}</a>
 			</div>
 		{/if}
-		<button type="button" class="mt-3 w-full rounded-full border border-linie py-2 text-[13px] font-bold sm:hidden" onclick={() => (offen = false)}>
-			Schließen
-		</button>
-	</div>
-</details>
+</Aufklapper>
