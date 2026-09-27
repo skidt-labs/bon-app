@@ -23,6 +23,9 @@ describe('aktiveSeite', () => {
 		expect(aktiveSeite('/auth/login')).toBeNull();
 		expect(aktiveSeite('/auth/callback?code=x')).toBeNull();
 		expect(aktiveSeite('/irgendwas')).toBeNull();
+		// Die Druckansicht traegt kein Geruest — auf dem Papier haben Leisten nichts verloren.
+		expect(aktiveSeite('/reports/druck')).toBeNull();
+		expect(aktiveSeite('/reports/druck?monat=2026-09')).toBeNull();
 	});
 });
 

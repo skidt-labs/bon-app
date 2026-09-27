@@ -22,6 +22,9 @@ import { antwortFuer } from './antworten';
 import { codeEinloesen } from '$lib/server/matrix/pairing';
 import { notifyMatrix } from '$lib/server/notify';
 import { schwaerzeFehler } from './schwaerzen';
+import { direktchatFuer, direktchatMerken, direktchatVergessen } from '$lib/server/matrix/links';
+import { getBoss, QUEUE_MATRIX_BERICHT, type MatrixBerichtJob } from '$lib/server/queue/boss';
+import { berichtZustellen } from './bericht';
 
 const CODE_MUSTER = /^[A-Z2-9]{8}$/i;
 
@@ -306,6 +309,28 @@ export async function starteMatrixBot(): Promise<void> {
 	await client.start();
 	console.log('[matrix] bereit');
 
+	// Berichte Stufe 3: angeforderte Zusammenfassungen zustellen. Ein Fehler beim Senden
+	// selbst (Synapse weg) wirft und wird von pg-boss wiederholt; alles, was an der
+	// Zustellbarkeit scheitert, wird gemeldet und nicht wiederholt.
+	const boss = await getBoss();
+	await boss.work<MatrixBerichtJob>(QUEUE_MATRIX_BERICHT, { batchSize: 1, pollingIntervalSeconds: 5 }, async (jobs) => {
+		for (const job of jobs) {
+			const ergebnis = await berichtZustellen(job.data, {
+				direktchatFuer: (id) => direktchatFuer(id),
+				mitglieder: (raum) => client.getJoinedRoomMembers(raum),
+				botId: () => client.getUserId(),
+				senden: async (raum, text) => {
+					await client.sendText(raum, text);
+				},
+				vergessen: (matrixUserId, raum) => direktchatVergessen(matrixUserId, raum)
+			});
+			if (ergebnis !== 'gesendet') {
+				console.warn('[matrix] Bericht nicht zugestellt', ergebnis, job.id);
+				await notifyMatrix(`Bon-Bot: Bericht nicht zugestellt (${ergebnis})`).catch(() => {});
+			}
+		}
+	});
+
 	// K1 (Korrekturrunde 2): HIER stand vorher ein 30-Sekunden-Zeitgeber, der
 	// bedingungslos `speicher.sichern()` rief — das war der eigentliche Defekt:
 	// er schrieb „lebt" alle 30s, ganz gleich, ob der letzte Sync geglückt war oder
@@ -419,8 +444,21 @@ export async function behandleNachricht(
 	// Nachrichten (Antworttexte, Kopplungsbestätigung) — eine Endlosschleife.
 	if (sender === (await client.getUserId())) return;
 
+	// Berichte Stufe 3: der Bot merkt sich, in welchem Raum ein gekoppeltes Konto mit ihm
+	// spricht — dorthin gehen spaeter angeforderte Zusammenfassungen. Scheitert das, laeuft
+	// die Nachricht trotzdem normal weiter; merken ist kein Grund, ein Foto zu verlieren.
+	await direktchatMerken(sender, roomId).catch((err) => {
+		console.error('[matrix] Direktchat nicht gemerkt', schwaerzeFehler(err));
+	});
+
 	if (inhalt.msgtype === 'm.text' && CODE_MUSTER.test((inhalt.body ?? '').trim())) {
 		const r = await codeEinloesen((inhalt.body ?? '').trim(), sender);
+		// Beim Merken oben gab es die Verknuepfung noch nicht — jetzt gibt es sie.
+		if (r.ok) {
+			await direktchatMerken(sender, roomId).catch((err) => {
+				console.error('[matrix] Direktchat nicht gemerkt', schwaerzeFehler(err));
+			});
+		}
 		await sendeSicher(roomId, 'Kopplungsantwort', () => client.sendText(roomId, textFuerKopplung(r)));
 		return;
 	}

@@ -25,8 +25,14 @@ vi.mock('./ingest', async (importOriginal) => {
 	const echt = await importOriginal<typeof import('./ingest')>();
 	return { ...echt, nimmBildAuf: vi.fn() };
 });
-vi.mock('$lib/server/matrix/pairing', () => ({ codeEinloesen: vi.fn() }));
+const kopplung = vi.hoisted(() => ({ codeEinloesen: vi.fn() }));
+vi.mock('$lib/server/matrix/pairing', () => kopplung);
 vi.mock('$lib/server/notify', () => ({ notifyMatrix: vi.fn(async () => {}) }));
+const links = vi.hoisted(() => ({ direktchatMerken: vi.fn(async () => {}) }));
+vi.mock('$lib/server/matrix/links', async (importOriginal) => ({
+	...(await importOriginal<typeof import('$lib/server/matrix/links')>()),
+	direktchatMerken: links.direktchatMerken
+}));
 
 import { PostgresStorageProvider } from './storage';
 import { erzeugeSpeicherWrapper, istAbsenderVomServer, serverVonMatrixId, pruefeStoreTypeSqlite, behandleNachricht } from './client';
@@ -229,5 +235,32 @@ describe('behandleNachricht (W5: Löschen hängt an der zugestellten Bestätigun
 
 		expect(client.sendText).toHaveBeenCalled();
 		expect(client.redactEvent).not.toHaveBeenCalled();
+	});
+
+	it('merkt sich den Direktchat, sobald ein Konto dem Bot schreibt', async () => {
+		const client = fakeClient();
+		await behandleNachricht(client as never, '!dm:example.org', {
+			type: 'm.room.message',
+			sender: '@erika:example.org',
+			event_id: '$text1',
+			content: { msgtype: 'm.text', body: 'hallo' }
+		} as never);
+		expect(links.direktchatMerken).toHaveBeenCalledWith('@erika:example.org', '!dm:example.org');
+	});
+
+	// Abschlusspruefung Stufe 3: beim Koppeln gab es die Verknuepfung noch nicht, als der
+	// Raum gemerkt werden sollte — direkt danach hiess es „schreib dem Bot einmal".
+	it('merkt sich den Direktchat auch gleich nach dem Koppeln', async () => {
+		kopplung.codeEinloesen.mockResolvedValueOnce({ ok: true, userId: 'u1' });
+		links.direktchatMerken.mockClear();
+		const client = fakeClient();
+		await behandleNachricht(client as never, '!dm:example.org', {
+			type: 'm.room.message',
+			sender: '@erika:example.org',
+			event_id: '$code1',
+			content: { msgtype: 'm.text', body: 'ABCDEFGH' }
+		} as never);
+		expect(links.direktchatMerken).toHaveBeenCalledTimes(2);
+		expect(links.direktchatMerken).toHaveBeenLastCalledWith('@erika:example.org', '!dm:example.org');
 	});
 });

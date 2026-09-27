@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { alsCsv, csvFeld, csvText } from './csv';
+import { alsCsv, csvFeld, csvText, exportDateiname } from './csv';
 
 const zeile = {
 	datum: '2026-09-17',
@@ -106,5 +106,32 @@ describe('csvText', () => {
 		// Negative Betraege bleiben Zahlen — sonst rechnet die Tabelle mit Text.
 		expect(spalten).toContain('-0,50');
 		expect(spalten).not.toContain("'-0,50");
+	});
+});
+
+describe('alsCsv mit Kopfzeilen', () => {
+	it('stellt Zeitraum und Filter vor die Tabelle, getrennt durch eine Leerzeile', () => {
+		const zeilen = alsCsv([zeile], [['Zeitraum', 'September 2026'], ['Filter', 'keine']]).split('\r\n');
+		expect(zeilen.slice(0, 4)).toEqual(['Zeitraum;September 2026', 'Filter;keine', '', expect.stringContaining('Datum;')]);
+	});
+
+	// Ein Suchbegriff steht woertlich in der Kopfzeile — er darf die Spalten nicht verschieben.
+	it('haelt Kopfzeilen mit Semikolon, Anfuehrungszeichen und Emoji spaltentreu', () => {
+		const kopf = alsCsv([], [['Filter', 'Suche: „a;b" "c" \u{1F600}']]).split('\r\n')[0];
+		expect(kopf).toBe('Filter;"Suche: „a;b"" ""c"" \u{1F600}"');
+	});
+
+	it('gibt fuer einen leeren Zeitraum nur Kopf und Spaltenueberschriften aus', () => {
+		const zeilen = alsCsv([], [['Zeitraum', 'Mai 2026']]).split('\r\n');
+		expect(zeilen).toHaveLength(3);
+		expect(zeilen[2]).toContain('Datum');
+	});
+});
+
+describe('exportDateiname', () => {
+	it('benennt die Datei nach dem Zeitraum', () => {
+		expect(exportDateiname({ art: 'monat', monat: '2026-09' })).toBe('bons-2026-09.csv');
+		expect(exportDateiname({ art: 'jahr', jahr: 2025 })).toBe('bons-2025.csv');
+		expect(exportDateiname({ art: 'spanne', von: '2026-03-01', bis: '2026-08-31' })).toBe('bons-2026-03-01-bis-2026-08-31.csv');
 	});
 });

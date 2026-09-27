@@ -4,6 +4,7 @@
 	import Filterleiste from '$lib/client/berichte/Filterleiste.svelte';
 	import Filterwahl from '$lib/client/berichte/Filterwahl.svelte';
 	import Gespeichert from '$lib/client/berichte/Gespeichert.svelte';
+	import Export from '$lib/client/berichte/Export.svelte';
 	import { filterAlsAdresse, hatFilter, wirktAufPositionen } from '$lib/berichte/filter';
 	import { formatCents } from '$lib/money';
 	import { adresse, leerText, monatImZeitraum, vergleichText, zeitraumName } from '$lib/berichte/zeitleiste';
@@ -36,12 +37,13 @@
 
 <Seite titel="Berichte" untertitel={name} haushalt={data.haushalt} nutzer={data.user?.displayName ?? null}>
 	{#snippet aktion()}
-		{#if zeitraum.art === 'monat'}
-			<a href="/reports/export.csv?monat={zeitraum.monat}" class="hidden rounded-xl border border-linie bg-papier px-4 py-2.5 text-sm font-bold lg:inline-block">CSV</a>
-		{/if}
+		<Export filter={data.filter} matrix={data.matrix} />
 	{/snippet}
 
 	<Gespeichert gespeicherte={data.gespeicherte} aktiv={data.aktiv} filter={data.filter} fehler={form?.grund ?? null} />
+	{#if data.meldung}
+		<p class="mb-3 rounded-xl bg-tuerkis-flaeche px-3.5 py-2.5 text-[13px] font-semibold text-tuerkis-dunkel">{data.meldung}</p>
+	{/if}
 	<Zeitleiste filter={data.filter} heute={data.heute} pfad="/reports" monatsSummen={data.monatsSummen} {zusatz} />
 	<Filterleiste filter={data.filter} namen={data.namen} pfad="/reports" {zusatz} />
 	{#if data.wahl}
@@ -309,10 +311,5 @@
 			{/if}
 		</section>
 
-		{#if zeitraum.art === 'monat'}
-			<p class="mt-4 text-[12.5px] lg:hidden">
-				<a href="/reports/export.csv?monat={zeitraum.monat}" class="font-semibold text-tuerkis-dunkel">Als CSV herunterladen ›</a>
-			</p>
-		{/if}
 	{/if}
 </Seite>

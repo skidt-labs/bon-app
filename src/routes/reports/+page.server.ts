@@ -1,4 +1,9 @@
 import { fail, redirect } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
+import { direktchatFuer } from '$lib/server/matrix/links';
+import { enqueueMatrixBericht } from '$lib/server/queue/boss';
+import { haushaltsName } from '$lib/server/betrieb/verwaltung';
+import { matrixZusammenfassung } from '$lib/server/berichte/zusammenfassung';
 import { db } from '$lib/server/db';
 import { berichtLaden } from '$lib/server/berichte/abfragen';
 import { filterOptionen, istWahlmerkmal } from '$lib/server/berichte/optionen';
@@ -17,7 +22,7 @@ import { filterAlsAdresse, filterAusAdresse, MERKMALE, type Merkmal } from '$lib
 import type { Actions, PageServerLoad } from './$types';
 
 /** Parameter, die den Bericht steuern, aber kein Filter sind. */
-const STEUERUNG = new Set(['bericht', 'wahl']);
+const STEUERUNG = new Set(['bericht', 'wahl', 'gesendet']);
 
 export const load: PageServerLoad = async ({ url, locals }) => {
 	if (!locals.user) redirect(302, '/auth/login');
@@ -39,7 +44,11 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const wahl = wahlRoh !== null && MERKMALE.includes(wahlRoh as Merkmal) ? (wahlRoh as Merkmal) : null;
 	if (wahlRoh !== null && wahl === null) hinweise.push(`„${wahlRoh}" ist kein Filter — ignoriert.`);
 
-	const [bericht, gespeicherte] = await Promise.all([berichtLaden(db, k, gelesen.filter, heute), gespeicherteListe(db, k)]);
+	const [bericht, gespeicherte, chat] = await Promise.all([
+		berichtLaden(db, k, gelesen.filter, heute),
+		gespeicherteListe(db, k),
+		direktchatFuer(locals.user.id)
+	]);
 	const optionen = wahl !== null && istWahlmerkmal(wahl) ? await filterOptionen(db, k, bericht.filter, wahl) : null;
 
 	return {
@@ -49,6 +58,10 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		wahl,
 		optionen,
 		gespeicherte,
+		/** Nach „per Matrix“ leitet die Aktion mit ?gesendet=1 auf denselben Bericht zurueck. */
+		meldung: url.searchParams.has('gesendet') ? 'Die Zusammenfassung ist unterwegs in deinen Direktchat mit dem Bon-Bot.' : null,
+		/** Ob „per Matrix" gehen kann — sonst sagt die Seite, was fehlt. */
+		matrix: (chat === null ? 'nicht_gekoppelt' : chat.raum === null ? 'kein_chat' : 'bereit') as 'bereit' | 'nicht_gekoppelt' | 'kein_chat',
 		aktiv: gespeichert
 			? { id: gespeichert.id, name: gespeichert.name, darfAendern: gespeichert.darfAendern, geaendert: istGeaendert(gespeichert, bericht.filter) }
 			: null
@@ -65,6 +78,23 @@ function zurueck(adresse: string, aktiv: string | null): string {
 }
 
 export const actions: Actions = {
+	matrix: async ({ request, locals }) => {
+		if (!locals.user) return fail(401, { grund: 'Nicht angemeldet' });
+		const chat = await direktchatFuer(locals.user.id);
+		if (!chat) return fail(400, { grund: 'Dein Konto ist nicht mit Matrix gekoppelt — das geht unter Einstellungen › Matrix.' });
+		if (!chat.raum) return fail(400, { grund: 'Schreib dem Bon-Bot einmal im Direktchat — dann weiß er, wohin die Zusammenfassung soll.' });
+		const form = await request.formData();
+		const heute = heutigerTag();
+		const k = locals.zugriff!;
+		const bericht = await berichtLaden(db, k, filterAus(form), heute);
+		const link = env.ORIGIN ? `${env.ORIGIN}/reports?${filterAlsAdresse(bericht.filter)}` : null;
+		const text = matrixZusammenfassung(bericht, (await haushaltsName(k.haushaltId)) ?? 'Haushalt', link);
+		await enqueueMatrixBericht({ userId: locals.user.id, text });
+		// Zurueck auf DENSELBEN Bericht, wie die anderen Aktionen: ein Formular an
+		// „?/matrix" ersetzt sonst die Adresse, und die Seite zeigte den laufenden Monat
+		// ohne Filter. Nach dem Umleiten schickt Neuladen auch nichts erneut.
+		redirect(303, `${zurueck(filterAlsAdresse(bericht.filter), null)}&gesendet=1`);
+	},
 	speichern: async ({ request, locals }) => {
 		if (!locals.user) return fail(401, { grund: 'Nicht angemeldet' });
 		const form = await request.formData();

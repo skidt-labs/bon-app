@@ -463,6 +463,12 @@ export const matrixLinks = pgTable('matrix_links', {
 		.unique()
 		.references(() => users.id, { onDelete: 'cascade' }),
 	matrixUserId: text('matrix_user_id').notNull().unique(),
+	/**
+	 * Der Direktchat, in dem dieses Konto mit dem Bot spricht — gemerkt, sobald es dem
+	 * Bot schreibt. Dorthin (und NUR dorthin) gehen angeforderte Berichtszusammenfassungen.
+	 * null = noch nie geschrieben; die App sagt dann, was zu tun ist.
+	 */
+	direktchatRaum: text('direktchat_raum'),
 	createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow()
 });
 

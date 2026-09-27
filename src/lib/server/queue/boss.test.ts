@@ -100,3 +100,23 @@ describe('Aufraeumen nach gescheitertem Start', () => {
 		expect(stop).not.toHaveBeenCalled();
 	});
 });
+
+describe('Matrix-Berichte', () => {
+	it('legt die Warteschlange matrix-bericht an', async () => {
+		const { getBoss, QUEUE_MATRIX_BERICHT } = await freshBoss();
+		await getBoss();
+		expect(QUEUE_MATRIX_BERICHT).toBe('matrix-bericht');
+		expect(createQueue).toHaveBeenCalledWith('matrix-bericht');
+	});
+
+	// Zweimal getippt ist eine Nachricht, nicht zwei: ein Auftrag je Nutzer und 30 Sekunden.
+	it('schickt einen Auftrag je Nutzer, nicht einen je Klick', async () => {
+		const { enqueueMatrixBericht, QUEUE_MATRIX_BERICHT } = await freshBoss();
+		await enqueueMatrixBericht({ userId: 'u1', text: 'Bericht' });
+		expect(send).toHaveBeenCalledWith(
+			QUEUE_MATRIX_BERICHT,
+			{ userId: 'u1', text: 'Bericht' },
+			expect.objectContaining({ singletonKey: 'u1', singletonSeconds: 30, retryLimit: 3 })
+		);
+	});
+});

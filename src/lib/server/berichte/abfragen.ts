@@ -1,7 +1,6 @@
 import { and, asc, eq, gte, inArray, lt, sql, type SQL } from 'drizzle-orm';
-import { alias } from 'drizzle-orm/pg-core';
 import type { db as Db } from '$lib/server/db';
-import { categories, merchants, receipts, receiptItems } from '$lib/server/db/schema';
+import { merchants, receipts, receiptItems } from '$lib/server/db/schema';
 import { budgetsFuerMonat } from '$lib/server/budgets/aufloesung';
 import { monatszahlenLaden } from './monatszahlen';
 import {
@@ -26,7 +25,6 @@ import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
 import { budgetsNichtZeigbar, zeitraumTage, type BerichtFilter } from '$lib/berichte/filter';
 import { ladeFenster, vergleichsZeitraeume, verlaufsAchse } from '$lib/berichte/zeitleiste';
 import { monatVon, monateVonBis } from '$lib/berichte/kalender';
-import type { CsvZeile } from './csv';
 
 /** Kaufzeit, ersatzweise Eingang — dieselbe Regel wie in bons/liste.ts. */
 export const wann = sql<Date>`coalesce(${receipts.purchasedAt}, ${receipts.createdAt})`;
@@ -210,43 +208,4 @@ export async function berichtLaden(db: typeof Db, k: Zugriffskontext, filterRoh:
 		rueckstand: zahlen.rueckstand,
 		monatsSummen: Object.fromEntries(summenJeMonat.map((s) => [s.monat, s.cents])) as Record<string, number>
 	};
-}
-
-/**
- * Eine Zeile je Position, fuer den CSV-Export eines Monats — nur bestaetigte Bons, wie
- * im Bericht: was noch niemand geprueft hat, ist keine Zahl, mit der man rechnen sollte.
- *
- * `grenzen.bis` ist AUSSCHLIESSLICH (so liefert es monatsgrenzen): Bis 0.3.2 stand hier
- * `<=`, und ein Bon um genau 00:00 Uhr am Ersten landete in zwei Monatsexporten.
- */
-export async function exportZeilenLaden(
-	db: typeof Db,
-	k: Zugriffskontext,
-	grenzen: { von: Date; bis: Date }
-): Promise<CsvZeile[]> {
-	const ober = alias(categories, 'ober');
-	const wann = sql<Date>`coalesce(${receipts.purchasedAt}, ${receipts.createdAt})`;
-
-	return db
-		.select({
-			datum: sql<string>`to_char(${wann} at time zone 'Europe/Berlin', 'YYYY-MM-DD')`,
-			haendler: sql<string | null>`coalesce(${merchants.name}, ${receipts.merchantNameRaw})`,
-			bonId: receipts.id,
-			lineNo: receiptItems.lineNo,
-			rawText: receiptItems.rawText,
-			lineType: sql<string>`${receiptItems.lineType}`,
-			quantity: receiptItems.quantity,
-			unit: receiptItems.unit,
-			unitPriceCents: receiptItems.unitPriceCents,
-			totalPriceCents: receiptItems.totalPriceCents,
-			kategorie: categories.name,
-			oberkategorie: ober.name
-		})
-		.from(receiptItems)
-		.innerJoin(receipts, eq(receipts.id, receiptItems.receiptId))
-		.leftJoin(merchants, eq(merchants.id, receipts.merchantId))
-		.leftJoin(categories, eq(categories.id, receiptItems.categoryId))
-		.leftJoin(ober, eq(ober.id, categories.parentId))
-		.where(and(sichtbareBons(k), eq(receipts.status, 'confirmed'), gte(wann, grenzen.von), lt(wann, grenzen.bis)))
-		.orderBy(asc(wann), asc(receipts.id), asc(receiptItems.lineNo));
 }

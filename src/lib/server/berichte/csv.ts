@@ -1,4 +1,5 @@
 import { ART_TEXT, type LineType } from '$lib/bons/zeilenarten';
+import type { Zeitraum } from '$lib/berichte/filter';
 
 /**
  * Die Monatsausfuhr als CSV — eine Zeile je Position.
@@ -66,7 +67,12 @@ function alsBetrag(cents: number): string {
 	return (cents / 100).toFixed(2).replace('.', ',');
 }
 
-export function alsCsv(zeilen: CsvZeile[]): string {
+/**
+ * `kopf` steht VOR der Tabelle: je Zeile „Bezeichnung;Wert", dann eine Leerzeile. So sieht
+ * man in der Datei, fuer welchen Zeitraum und welche Filter sie gilt — eine Ausfuhr ohne
+ * diese Angaben ist nach dem dritten Herunterladen nicht mehr zuzuordnen.
+ */
+export function alsCsv(zeilen: CsvZeile[], kopf: [string, string][] = []): string {
 	const reihen = zeilen.map((z) =>
 		[
 			csvFeld(z.datum),
@@ -87,5 +93,13 @@ export function alsCsv(zeilen: CsvZeile[]): string {
 			csvFeld(z.bonId)
 		].join(';')
 	);
-	return [KOPF.join(';'), ...reihen].join('\r\n');
+	const vorspann = kopf.length === 0 ? [] : [...kopf.map(([k, v]) => `${csvText(k)};${csvText(v)}`), ''];
+	return [...vorspann, KOPF.join(';'), ...reihen].join('\r\n');
+}
+
+/** Dateiname nach dem Zeitraum: bons-2026-09.csv, bons-2025.csv, bons-2026-03-01-bis-2026-08-31.csv */
+export function exportDateiname(z: Zeitraum): string {
+	if (z.art === 'monat') return `bons-${z.monat}.csv`;
+	if (z.art === 'jahr') return `bons-${z.jahr}.csv`;
+	return `bons-${z.von}-bis-${z.bis}.csv`;
 }

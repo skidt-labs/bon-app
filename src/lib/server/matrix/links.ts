@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 import { db } from '../db';
 import { matrixLinks, users, householdMembers } from '../db/schema';
 
@@ -61,4 +61,45 @@ type Ausfuehrer = Pick<typeof db, 'delete'>;
  */
 export async function verknuepfungLoesen(ausfuehrer: Ausfuehrer, userId: string): Promise<void> {
 	await ausfuehrer.delete(matrixLinks).where(eq(matrixLinks.userId, userId));
+}
+
+/**
+ * Merkt sich den Raum, in dem ein GEKOPPELTES Konto dem Bot schreibt. Ein nicht gekoppelter
+ * Absender aendert nichts (keine Zeile). Ob der Raum beim Senden noch ein Direktchat ist,
+ * prueft der Bot dann erneut — gemerkt ist nur, wohin es gehen SOLL.
+ */
+export async function direktchatMerken(
+	matrixUserId: string,
+	raum: string,
+	ausfuehrer: Pick<typeof db, 'update'> = db
+): Promise<void> {
+	await ausfuehrer.update(matrixLinks).set({ direktchatRaum: raum }).where(eq(matrixLinks.matrixUserId, matrixUserId));
+}
+
+/** Kopplung und gemerkter Direktchat eines Nutzers; null = nicht gekoppelt. */
+export async function direktchatFuer(
+	userId: string,
+	ausfuehrer: Pick<typeof db, 'select'> = db
+): Promise<{ matrixUserId: string; raum: string | null } | null> {
+	const [zeile] = await ausfuehrer
+		.select({ matrixUserId: matrixLinks.matrixUserId, raum: matrixLinks.direktchatRaum })
+		.from(matrixLinks)
+		.where(eq(matrixLinks.userId, userId));
+	return zeile ?? null;
+}
+
+/**
+ * Vergisst einen gemerkten Raum, der kein Direktchat mehr ist (jemand kam dazu, das Konto
+ * ging). Nur GENAU diesen Raum: hat das Konto inzwischen aus einem neuen Direktchat
+ * geschrieben, bleibt der neue stehen. Danach sagt die App „schreib dem Bon-Bot einmal".
+ */
+export async function direktchatVergessen(
+	matrixUserId: string,
+	raum: string,
+	ausfuehrer: Pick<typeof db, 'update'> = db
+): Promise<void> {
+	await ausfuehrer
+		.update(matrixLinks)
+		.set({ direktchatRaum: null })
+		.where(and(eq(matrixLinks.matrixUserId, matrixUserId), eq(matrixLinks.direktchatRaum, raum)));
 }

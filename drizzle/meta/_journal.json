@@ -218,6 +218,13 @@
       "when": 1790342137624,
       "tag": "0030_gespeicherte_berichte",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1790506083707,
+      "tag": "0031_matrix_direktchat",
+      "breakpoints": true
     }
   ]
 }

@@ -1,0 +1,1 @@
+ALTER TABLE "matrix_links" ADD COLUMN "direktchat_raum" text;

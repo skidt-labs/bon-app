@@ -10,6 +10,10 @@ export const QUEUE_EXTRACT = 'extract-receipt';
 
 export type ExtractJob = { receiptId: string };
 
+/** Berichte Stufe 3: angeforderte Zusammenfassungen, zugestellt von bon-matrix. */
+export const QUEUE_MATRIX_BERICHT = 'matrix-bericht';
+export type MatrixBerichtJob = { userId: string; text: string };
+
 let instance: PgBoss | null = null;
 let starting: Promise<PgBoss> | null = null;
 
@@ -26,6 +30,7 @@ async function start(): Promise<PgBoss> {
 	// ist es unschädlich, wenn bon-web und bon-worker das beim Kaltstart gleichzeitig
 	// aufrufen (siehe Task-7-Report für die Begründung).
 		await boss.createQueue(QUEUE_EXTRACT);
+		await boss.createQueue(QUEUE_MATRIX_BERICHT);
 	} catch (err) {
 		// Scheitert createQueue, ist boss.start() bereits durch: die Instanz hält einen
 		// offenen Pool und laufende Intervalle. Ohne dieses stop() bliebe bei JEDEM
@@ -94,5 +99,20 @@ export async function enqueueExtraction(receiptId: string): Promise<void> {
 		// Muss ueber dem Zeitlimit der Anfrage liegen, sonst laeuft ein zweiter Versuch
 		// an, waehrend der erste noch unterwegs ist — siehe fristen.ts.
 		expireInSeconds: AUFTRAG_VERFAELLT_SEKUNDEN
+	});
+}
+
+/**
+ * Ein Bericht in den eigenen Matrix-Direktchat. Wenige Wiederholungen (Synapse kurz weg),
+ * und ein Auftrag je Nutzer und 30 Sekunden: wer zweimal tippt, bekommt eine Nachricht.
+ */
+export async function enqueueMatrixBericht(job: MatrixBerichtJob): Promise<void> {
+	const boss = await getBoss();
+	await boss.send(QUEUE_MATRIX_BERICHT, job, {
+		retryLimit: 3,
+		retryDelay: 60,
+		expireInSeconds: 300,
+		singletonKey: job.userId,
+		singletonSeconds: 30
 	});
 }

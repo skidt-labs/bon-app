@@ -1,35 +1,46 @@
 import { error, redirect } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
-import { exportZeilenLaden } from '$lib/server/berichte/abfragen';
-import { alsCsv } from '$lib/server/berichte/csv';
-import { monatsgrenzen } from '$lib/server/zeit';
+import { exportLaden } from '$lib/server/berichte/export';
+import { alsCsv, exportDateiname } from '$lib/server/berichte/csv';
+import { heutigerTag } from '$lib/server/zeit';
+import { filterAusAdresse, hatFilter, wirktAufPositionen } from '$lib/berichte/filter';
+import { filterZusammenfassung } from '$lib/berichte/merkmale';
+import { zeitraumName } from '$lib/berichte/zeitleiste';
+import { tagName } from '$lib/berichte/kalender';
 import type { RequestHandler } from './$types';
 
-const MONAT = /^\d{4}-(?:0[1-9]|1[0-2])$/;
-
 /**
- * Ein Monat als CSV, eine Zeile je Position — zum Weiterrechnen in der Tabelle.
+ * Ein Bericht als CSV, eine Zeile je Position — zum Weiterrechnen in der Tabelle. Dieselbe
+ * Adresse wie der Bericht (auch die Altform ?monat=), dieselbe Rechnung.
  *
- * Ausgefuehrt werden NUR bestaetigte Bons, wie im Bericht: was noch niemand geprueft
- * hat, ist keine Zahl, mit der man rechnen sollte.
+ * Ausgefuehrt werden NUR bestaetigte Bons, wie im Bericht.
  */
 export const GET: RequestHandler = async ({ url, locals }) => {
 	if (!locals.user) redirect(302, '/auth/login');
-	const monat = url.searchParams.get('monat') ?? '';
-	if (!MONAT.test(monat)) error(400, 'Monat als JJJJ-MM angeben');
-	const grenzen = monatsgrenzen(monat);
-	if (!grenzen) error(400, 'Monat als JJJJ-MM angeben');
+	const heute = heutigerTag();
+	const gelesen = filterAusAdresse(url.searchParams, heute);
+	// Eine Datei kann keinen Hinweis zeigen. Statt still etwas anderes auszufuehren als
+	// verlangt (etwa den laufenden Monat statt eines vertippten): ablehnen und sagen, warum.
+	if (gelesen.hinweise.length > 0) error(400, gelesen.hinweise.join(' '));
 
-	const zeilen = await exportZeilenLaden(db, locals.zugriff!, grenzen);
+	const aus = await exportLaden(db, locals.zugriff!, gelesen.filter);
+	const kopf: [string, string][] = [
+		['Zeitraum', zeitraumName(aus.filter.zeitraum)],
+		['Umfang', aus.filter.umfang === 'meine' ? 'Nur meine Bons' : 'Ganzer Haushalt'],
+		['Filter', hatFilter(aus.filter) ? filterZusammenfassung(aus.filter, aus.namen).join(' · ') : 'keine'],
+		['Zeilen', wirktAufPositionen(aus.filter) ? 'nur die passenden Positionen' : 'alle Positionen der Bons'],
+		['Stand', `nur bestätigte Bons · erstellt am ${tagName(heute)}`],
+		// Unbekanntes aus einem alten Lesezeichen wurde weggelassen — das steht in der Datei.
+		...aus.hinweise.map((h): [string, string] => ['Hinweis', h])
+	];
 
 	// Byte-Reihenfolge-Marke voran: ohne sie liest Excel die Datei als Latin-1, und aus
-	// „Gemüse" wird „GemÃ¼se". Ein Ausfuhrformat, das der Empfaenger nachbearbeiten muss,
-	// ist keines.
-	const inhalt = '﻿' + alsCsv(zeilen) + '\r\n';
+	// „Gemüse" wird „GemÃ¼se".
+	const inhalt = '﻿' + alsCsv(aus.zeilen, kopf) + '\r\n';
 	return new Response(inhalt, {
 		headers: {
 			'content-type': 'text/csv; charset=utf-8',
-			'content-disposition': `attachment; filename="bons-${monat}.csv"`,
+			'content-disposition': `attachment; filename="${exportDateiname(aus.filter.zeitraum)}"`,
 			'cache-control': 'no-store'
 		}
 	});

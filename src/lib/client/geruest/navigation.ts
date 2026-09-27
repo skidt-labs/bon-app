@@ -46,6 +46,8 @@ export function aktiveSeite(pfad: string): SeitenId | null {
 	if (p === '/dashboard') return 'start';
 	if (p === '/inbox' || p.startsWith('/inbox/')) return 'posteingang';
 	if (p === '/receipts' || p.startsWith('/receipts/')) return 'bons';
+	// Die Druckansicht ist fuers Papier: ohne Leisten, ohne Navigation.
+	if (p === '/reports/druck') return null;
 	if (p === '/reports' || p.startsWith('/reports/')) return 'berichte';
 	if (p.startsWith('/settings')) return 'einstellungen';
 	return null;

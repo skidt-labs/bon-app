@@ -5,6 +5,14 @@ vi.mock('$lib/server/db', () => ({ db: {} }));
 vi.mock('$lib/server/zeit', () => ({ heutigerTag: () => '2026-09-25' }));
 vi.mock('$lib/server/berichte/abfragen', () => ({ berichtLaden: mocks.bericht }));
 vi.mock('$lib/server/berichte/bons', () => ({ bonsZuFilter: mocks.bons }));
+const matrix = vi.hoisted(() => ({
+	chat: vi.fn(async (_userId: string): Promise<{ matrixUserId: string; raum: string | null } | null> => null),
+	enqueue: vi.fn(async (_job: { userId: string; text: string }) => {})
+}));
+vi.mock('$lib/server/matrix/links', () => ({ direktchatFuer: matrix.chat }));
+vi.mock('$lib/server/queue/boss', () => ({ enqueueMatrixBericht: matrix.enqueue }));
+vi.mock('$lib/server/betrieb/verwaltung', () => ({ haushaltsName: vi.fn(async () => 'Familie Beispiel') }));
+vi.mock('$env/dynamic/private', () => ({ env: { ORIGIN: 'https://bon.example.org' } }));
 const gespeichert = vi.hoisted(() => ({
 	laden: vi.fn(), liste: vi.fn(async () => []), speichern: vi.fn(), aendern: vi.fn(), umbenennen: vi.fn(), loeschen: vi.fn()
 }));
@@ -25,12 +33,15 @@ vi.mock('$lib/server/berichte/gespeichert', async () => {
 
 import { load as berichtSeite } from './+page.server';
 import { load as bonsSeite } from './bons/+page.server';
+import { load as druckSeite } from './druck/+page.server';
 import { actions } from './+page.server';
 
 const angemeldet = (q: string) =>
 	({ url: new URL(`https://bon.example.org/reports?${q}`), locals: { user: { id: 'u1' }, zugriff: { haushaltId: 'h1', nutzerId: 'u1', rolle: 'mitglied' } } }) as never;
 
 beforeEach(() => {
+	matrix.chat.mockReset().mockResolvedValue(null);
+	matrix.enqueue.mockReset();
 	gespeichert.laden.mockReset().mockResolvedValue(null);
 	mocks.bericht.mockReset().mockImplementation(async (_db, _k, filter) => ({ filter, hinweise: ['aus der Abfrage'] }));
 	mocks.bons.mockReset().mockImplementation(async (_db, _k, filter) => ({ filter, hinweise: [], titel: 'Obst', bons: [] }));
@@ -123,5 +134,71 @@ describe('/reports: gespeicherte Berichte und Filterauswahl', () => {
 		expect(await actions.speichern(formular({ name: 'Kaffee', adresse: 'zeitraum=monat&monat=2026-09' }))).toMatchObject({
 			status: 400, data: { grund: 'Einen Bericht mit diesem Namen gibt es im Haushalt schon.' }
 		});
+	});
+});
+
+describe('/reports/druck', () => {
+	// Die Druckansicht rechnet mit DERSELBEN Funktion und denselben Argumenten wie die Seite.
+	it('rechnet identisch zur Berichtsseite', async () => {
+		mocks.bericht.mockImplementation(async (_db, _k, filter) => ({ filter, hinweise: [], kennzahlen: { summe: 4711, bons: 3 } }));
+		const q = 'zeitraum=jahr&jahr=2025&suche=Kaffee';
+		const seite = (await berichtSeite(angemeldet(q))) as { kennzahlen: unknown };
+		const argsSeite = mocks.bericht.mock.calls.at(-1);
+		const druck = (await druckSeite(angemeldet(q))) as { kennzahlen: unknown; heute: string };
+		const argsDruck = mocks.bericht.mock.calls.at(-1);
+		expect(argsDruck).toEqual(argsSeite);
+		expect(druck.kennzahlen).toEqual(seite.kennzahlen);
+		expect(druck.heute).toBe('2026-09-25');
+	});
+
+	it('leitet ohne Anmeldung zur Anmeldung', async () => {
+		await expect(druckSeite({ url: new URL('https://bon.example.org/reports/druck'), locals: {} } as never)).rejects.toMatchObject({ status: 302 });
+	});
+});
+
+describe('/reports: Zusammenfassung per Matrix', () => {
+	const formular = (felder: Record<string, string>) => {
+		const f = new FormData();
+		for (const [k, v] of Object.entries(felder)) f.set(k, v);
+		return { locals: { user: { id: 'u1' }, zugriff: { haushaltId: 'h1', nutzerId: 'u1', rolle: 'mitglied' } }, request: new Request('https://bon.example.org/reports', { method: 'POST', body: f }) } as never;
+	};
+
+	it('meldet den Zustand fuer den Knopf', async () => {
+		expect(((await berichtSeite(angemeldet(''))) as { matrix: string }).matrix).toBe('nicht_gekoppelt');
+		matrix.chat.mockResolvedValue({ matrixUserId: '@erika:example.org', raum: null });
+		expect(((await berichtSeite(angemeldet(''))) as { matrix: string }).matrix).toBe('kein_chat');
+		matrix.chat.mockResolvedValue({ matrixUserId: '@erika:example.org', raum: '!dm:example.org' });
+		expect(((await berichtSeite(angemeldet(''))) as { matrix: string }).matrix).toBe('bereit');
+	});
+
+	it('sagt klar, was fehlt, statt still nichts zu tun', async () => {
+		expect(await actions.matrix(formular({ adresse: 'zeitraum=monat&monat=2026-09' }))).toMatchObject({ status: 400, data: { grund: expect.stringContaining('gekoppelt') } });
+		matrix.chat.mockResolvedValue({ matrixUserId: '@erika:example.org', raum: null });
+		expect(await actions.matrix(formular({ adresse: 'zeitraum=monat&monat=2026-09' }))).toMatchObject({ status: 400, data: { grund: expect.stringContaining('Direktchat') } });
+		expect(matrix.enqueue).not.toHaveBeenCalled();
+	});
+
+	it('legt einen Auftrag mit der Zusammenfassung an', async () => {
+		matrix.chat.mockResolvedValue({ matrixUserId: '@erika:example.org', raum: '!dm:example.org' });
+		mocks.bericht.mockImplementation(async (_db, _k, filter) => ({
+			filter, namen: { laden: {}, kategorie: {}, person: {}, topf: {} }, hinweise: [],
+			kennzahlen: { summe: 1234, bons: 2 }, vergleiche: [], kategorien: []
+		}));
+		// Zurueck zum GLEICHEN Bericht (Abschlusspruefung: vorher laufender Monat ohne Filter).
+		await expect(actions.matrix(formular({ adresse: 'zeitraum=jahr&jahr=2025&suche=Kaffee' }))).rejects.toMatchObject({
+			status: 303,
+			location: '/reports?zeitraum=jahr&jahr=2025&suche=Kaffee&gesendet=1'
+		});
+		expect(matrix.enqueue).toHaveBeenCalledWith({ userId: 'u1', text: expect.stringContaining('Ausgaben: 12,34 € in 2 Bons') });
+		expect(matrix.enqueue.mock.calls[0][0].text).toContain('https://bon.example.org/reports?zeitraum=jahr&jahr=2025&suche=Kaffee');
+	});
+});
+
+describe('/reports: Meldung nach dem Senden', () => {
+	it('zeigt die Meldung aus der Adresse, ohne sie als Filterfehler zu melden', async () => {
+		const daten = (await berichtSeite(angemeldet('zeitraum=monat&monat=2026-09&gesendet=1'))) as { meldung: string | null; hinweise: string[] };
+		expect(daten.meldung).toContain('Direktchat');
+		expect(daten.hinweise).toEqual(['aus der Abfrage']);
+		expect(((await berichtSeite(angemeldet('zeitraum=monat&monat=2026-09'))) as { meldung: string | null }).meldung).toBeNull();
 	});
 });
