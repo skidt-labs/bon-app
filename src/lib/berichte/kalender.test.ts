@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	istMonat, istTag, tagPlus, tageZwischen, monatPlus, letzterTag, ersterTag,
-	monatVon, jahrVon, jahrePlus, monatsName, monatsKurz, tagName
+	monatVon, jahrVon, jahrePlus, monatsName, monatsKurz, tagName, monateVonBis
 } from './kalender';
 
 describe('istMonat / istTag', () => {
@@ -60,5 +60,13 @@ describe('Namen', () => {
 		expect(tagName('2026-09-25', false)).toBe('25. Sept.');
 		expect(tagName('2026-05-01')).toBe('1. Mai 2026');
 		expect(tagName('2025-12-01')).toBe('1. Dez. 2025');
+	});
+});
+
+describe('monateVonBis', () => {
+	it('zaehlt die Monate einschliesslich beider Enden', () => {
+		expect(monateVonBis('2025-11', '2026-02')).toEqual(['2025-11', '2025-12', '2026-01', '2026-02']);
+		expect(monateVonBis('2026-09', '2026-09')).toEqual(['2026-09']);
+		expect(monateVonBis('2026-09', '2026-08')).toEqual([]);
 	});
 });

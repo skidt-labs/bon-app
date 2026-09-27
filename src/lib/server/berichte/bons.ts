@@ -1,12 +1,13 @@
-import { and, asc, desc, eq, gte, inArray, lt, sql } from 'drizzle-orm';
-import type { db as Db } from '$lib/server/db';
-import { categories, merchants, receipts, receiptItems } from '$lib/server/db/schema';
 import { MONETAER, type LineType } from '$lib/bons/zeilenarten';
+import type { db as Db } from '$lib/server/db';
 import { tagesgrenzen } from '$lib/server/zeit';
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
-import { zeitraumTage, type BerichtFilter } from '$lib/berichte/filter';
-import { alsTag, bonBedingung, wann } from './abfragen';
-import { kategorienAufloesen, passendePositionen } from './rechnung';
+import { hatFilter, UNSORTIERT, zeitraumTage, type BerichtFilter } from '$lib/berichte/filter';
+import { monatVon, monateVonBis } from '$lib/berichte/kalender';
+import type { FilterNamen } from '$lib/berichte/merkmale';
+import { bonsImFenster, positionenZu } from './abfragen';
+import { filterAufloesen, stammdatenLaden } from './aufloesen';
+import { bonPasst, kriterienAktiv, positionsTreffer } from './kriterien';
 
 export type BonZeile = {
 	id: string;
@@ -15,117 +16,85 @@ export type BonZeile = {
 	/** Nur eigene Bons koennen privat UND sichtbar sein — der Chip sagt „nur du siehst ihn". */
 	privat: boolean;
 	gesamtCents: number | null;
-	/** null = Bon ohne erkannte Endsumme (nur ohne Kategoriefilter) — eine Leerstelle, keine 0. */
+	/** null = Bon ohne erkannte Endsumme (nur ohne Positionsmerkmal) — eine Leerstelle, keine 0. */
 	passendCents: number | null;
 	passende: { rawText: string; cents: number; kategorie: string | null }[];
 };
 
 export type BonsZuFilter = {
+	filter: BerichtFilter;
+	namen: FilterNamen;
 	hinweise: string[];
+	/** Name, wenn genau EIN Laden oder EINE Kategorie gewaehlt ist — sonst null („Auswahl"). */
 	titel: string | null;
 	bons: BonZeile[];
 	summe: number;
 	/** Bons ohne erkannte Endsumme: sie stehen in der Liste, aber nicht in der Summe. */
 	ohneBetrag: number;
 	positionen: number;
-	/** Ob wirklich nach Kategorie gefiltert wird (unbekannte Slugs zaehlen nicht). */
-	nachKategorie: boolean;
-	/** Bei einer Oberkategorie: ihre Unterkategorien mit Betrag, als Filterpillen. */
+	/** Ob ein Positionsmerkmal wirkt (Kategorie, Topf, Suche). */
+	nachPositionen: boolean;
+	/** Bei genau einer Oberkategorie: ihre Unterkategorien mit Betrag, als Filterpillen. */
 	unterkategorien: { slug: string; name: string; cents: number }[];
-	/** Bei einer Unterkategorie: der Weg zurueck zur Oberkategorie. */
+	/** Bei genau einer Unterkategorie: der Weg zurueck zur Oberkategorie. */
 	oberkategorie: { slug: string; name: string } | null;
 };
 
 /**
  * „Bons zu …": die bestaetigten Bons eines Zeitraums, die zum Filter passen — mit den
- * passenden Positionen. Ohne Kategoriefilter (nur Laden) zaehlt die gedruckte Bonsumme,
- * wie in der Kopfzahl des Berichts; mit Kategoriefilter die Summe der passenden Zeilen.
+ * passenden Positionen. Ohne Positionsmerkmal zaehlt die gedruckte Bonsumme, wie in der
+ * Kopfzahl des Berichts; mit Positionsmerkmal die Summe der passenden Zeilen.
  */
-export async function bonsZuFilter(db: typeof Db, k: Zugriffskontext, filter: BerichtFilter): Promise<BonsZuFilter> {
-	const tage = zeitraumTage(filter.zeitraum);
+export async function bonsZuFilter(db: typeof Db, k: Zugriffskontext, filterRoh: BerichtFilter): Promise<BonsZuFilter> {
+	const tage = zeitraumTage(filterRoh.zeitraum);
 	const grenzen = tagesgrenzen(tage.von, tage.bis);
 	if (!grenzen) throw new Error(`Unbrauchbarer Zeitraum ${tage.von}–${tage.bis}`);
-	const hinweise: string[] = [];
+	const monate = monateVonBis(monatVon(tage.von), monatVon(tage.bis));
 
-	const [kategorien, laeden] = await Promise.all([
-		db.select({ id: categories.id, name: categories.name, parentId: categories.parentId, slug: categories.slug }).from(categories),
-		filter.laden.length === 0
-			? Promise.resolve([] as { id: string; name: string }[])
-			: db.select({ id: merchants.id, name: merchants.name }).from(merchants).where(inArray(merchants.id, filter.laden))
-	]);
-	if (laeden.length < filter.laden.length) hinweise.push('Einen der gewählten Läden gibt es nicht (mehr).');
-	const aufgeloest = kategorienAufloesen(filter.kategorie, kategorien);
-	for (const s of aufgeloest.unbekannt) hinweise.push(`Die Kategorie „${s}" gibt es nicht — ignoriert.`);
-	const nachKategorie = aufgeloest.ids.size > 0;
+	const stamm = await stammdatenLaden(db, k);
+	const { filter, namen, hinweise, kriterien } = await filterAufloesen(db, k, filterRoh, stamm, monate);
+	const leer = {
+		filter, namen, titel: null, bons: [], summe: 0, ohneBetrag: 0, positionen: 0,
+		nachPositionen: false, unterkategorien: [], oberkategorie: null
+	};
+	// Blieb kein Merkmal uebrig (nichts gewaehlt, oder nur Unbekanntes aus einem alten
+	// Lesezeichen), zeigte die Liste sonst ALLE Bons, als waeren sie gefiltert.
+	if (!hatFilter(filter)) return { ...leer, hinweise: [...hinweise, 'Wähle im Bericht einen Filter, eine Kategorie oder einen Laden.'] };
+	if (filter.betrag !== null) hinweise.push('Bons ohne erkannte Endsumme fallen bei einer Betragsspanne heraus.');
 
-	// Blieb von der Kategorie nichts uebrig (veraltetes Lesezeichen) und gibt es keinen
-	// Laden, waere die Abfrage ungefiltert — sie zeigte ALLE Bons unter „Bons zu …".
-	if (!nachKategorie && filter.laden.length === 0) {
-		return {
-			hinweise: [...hinweise, 'Wähle im Bericht eine Kategorie oder einen Laden.'],
-			titel: null,
-			bons: [],
-			summe: 0,
-			ohneBetrag: 0,
-			positionen: 0,
-			nachKategorie: false,
-			unterkategorien: [],
-			oberkategorie: null
-		};
-	}
-
+	const nachPositionen = kriterienAktiv(kriterien);
 	const titel =
-		(nachKategorie
-			? filter.kategorie.map((s) => kategorien.find((c) => c.slug === s)?.name).filter(Boolean).join(', ')
-			: laeden.map((l) => l.name).join(', ')) || null;
+		filter.laden.length === 1 && filter.kategorie.length === 0
+			? (namen.laden[filter.laden[0]] ?? (filter.laden[0] === 'ohne' ? 'unbekanntem Laden' : null))
+			: filter.kategorie.length === 1 && filter.laden.length === 0
+				? filter.kategorie[0] === UNSORTIERT
+					? null
+					: (namen.kategorie[filter.kategorie[0]] ?? null)
+				: null;
 
-	const bons = await db
-		.select({
-			id: receipts.id,
-			tag: alsTag,
-			cents: receipts.totalGrossCents,
-			sichtbarkeit: receipts.sichtbarkeit,
-			haendler: sql<string | null>`coalesce(${merchants.name}, ${receipts.merchantNameRaw})`
-		})
-		.from(receipts)
-		.leftJoin(merchants, eq(merchants.id, receipts.merchantId))
-		.where(and(bonBedingung(k, filter), eq(receipts.status, 'confirmed'), gte(wann, grenzen.von), lt(wann, grenzen.bis)))
-		.orderBy(desc(wann), asc(receipts.id));
-
-	const positionen =
-		bons.length === 0
-			? []
-			: await db
-					.select({
-						receiptId: receiptItems.receiptId,
-						lineNo: receiptItems.lineNo,
-						rawText: receiptItems.rawText,
-						categoryId: receiptItems.categoryId,
-						lineType: sql<string>`${receiptItems.lineType}`,
-						totalPriceCents: receiptItems.totalPriceCents
-					})
-					.from(receiptItems)
-					.where(inArray(receiptItems.receiptId, bons.map((b) => b.id)))
-					.orderBy(asc(receiptItems.receiptId), asc(receiptItems.lineNo));
-
-	const treffer = nachKategorie
-		? passendePositionen(positionen, aufgeloest.ids)
+	const bons = (await bonsImFenster(db, k, filter, grenzen))
+		.filter((b) => bonPasst(b, filter))
+		.sort((a, b) => new Date(b.zeit).getTime() - new Date(a.zeit).getTime() || a.id.localeCompare(b.id));
+	const positionen = await positionenZu(db, bons.map((b) => b.id));
+	const monatVonBon = new Map(bons.map((b) => [b.id, b.tag.slice(0, 7)]));
+	const treffer = nachPositionen
+		? positionsTreffer(positionen, kriterien, monatVonBon)
 		: positionen.filter((p) => MONETAER.includes(p.lineType as LineType));
 	const jeBon = new Map<string, typeof treffer>();
 	for (const p of treffer) jeBon.set(p.receiptId, [...(jeBon.get(p.receiptId) ?? []), p]);
-	const kategorieName = new Map(kategorien.map((c) => [c.id, c.name]));
+	const kategorieName = new Map(stamm.kategorien.map((c) => [c.id, c.name]));
 
 	const zeilen: BonZeile[] = [];
 	for (const b of bons) {
 		const passende = jeBon.get(b.id) ?? [];
-		if (nachKategorie && passende.length === 0) continue;
+		if (nachPositionen && passende.length === 0) continue;
 		zeilen.push({
 			id: b.id,
 			tag: b.tag,
 			haendler: b.haendler,
 			privat: b.sichtbarkeit === 'privat',
 			gesamtCents: b.cents,
-			passendCents: nachKategorie ? passende.reduce((s, p) => s + p.totalPriceCents, 0) : b.cents,
+			passendCents: nachPositionen ? passende.reduce((s, p) => s + p.totalPriceCents, 0) : b.cents,
 			passende: passende.map((p) => ({
 				rawText: p.rawText,
 				cents: p.totalPriceCents,
@@ -136,7 +105,7 @@ export async function bonsZuFilter(db: typeof Db, k: Zugriffskontext, filter: Be
 
 	let unterkategorien: BonsZuFilter['unterkategorien'] = [];
 	let oberkategorie: BonsZuFilter['oberkategorie'] = null;
-	const gewaehlt = filter.kategorie.length === 1 ? kategorien.find((c) => c.slug === filter.kategorie[0]) : undefined;
+	const gewaehlt = filter.kategorie.length === 1 ? stamm.kategorien.find((c) => c.slug === filter.kategorie[0]) : undefined;
 	if (gewaehlt && gewaehlt.parentId === null) {
 		const behalten = new Set(zeilen.map((z) => z.id));
 		const summen = new Map<string, number>();
@@ -145,23 +114,25 @@ export async function bonsZuFilter(db: typeof Db, k: Zugriffskontext, filter: Be
 				summen.set(p.categoryId, (summen.get(p.categoryId) ?? 0) + p.totalPriceCents);
 			}
 		}
-		unterkategorien = kategorien
+		unterkategorien = stamm.kategorien
 			.filter((c) => c.parentId === gewaehlt.id && summen.has(c.id))
 			.map((c) => ({ slug: c.slug, name: c.name, cents: summen.get(c.id)! }))
 			.sort((a, b) => b.cents - a.cents);
 	} else if (gewaehlt && gewaehlt.parentId !== null) {
-		const eltern = kategorien.find((c) => c.id === gewaehlt.parentId);
+		const eltern = stamm.kategorien.find((c) => c.id === gewaehlt.parentId);
 		if (eltern) oberkategorie = { slug: eltern.slug, name: eltern.name };
 	}
 
 	return {
+		filter,
+		namen,
 		hinweise,
 		titel,
 		bons: zeilen,
 		summe: zeilen.reduce((s, z) => s + (z.passendCents ?? 0), 0),
 		ohneBetrag: zeilen.filter((z) => z.passendCents === null).length,
 		positionen: zeilen.reduce((s, z) => s + z.passende.length, 0),
-		nachKategorie,
+		nachPositionen,
 		unterkategorien,
 		oberkategorie
 	};

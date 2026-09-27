@@ -731,3 +731,26 @@ export const betriebsprotokoll = pgTable(
 	},
 	(t) => [index('betriebsprotokoll_zeit_idx').on(t.zeit)]
 );
+
+/**
+ * Benannte Berichte eines Haushalts. Gespeichert werden NUR die Filterwerte als
+ * Adressparameter (Ids, Text) — keine Ergebnisse: jeder Aufruf rechnet mit den Rechten
+ * dessen, der ihn oeffnet. `zeitraum` ist null, wenn der Bericht immer den laufenden Monat
+ * oeffnen soll. Beim Lesen laeuft beides durch filterAusAdresse, wie eine Adresse.
+ */
+export const gespeicherteBerichte = pgTable(
+	'gespeicherte_berichte',
+	{
+		id: uuid('id').primaryKey().defaultRandom(),
+		householdId: uuid('household_id')
+			.notNull()
+			.references(() => households.id, { onDelete: 'cascade' }),
+		name: text('name').notNull(),
+		filter: jsonb('filter').$type<Record<string, string>>().notNull(),
+		zeitraum: jsonb('zeitraum').$type<Record<string, string>>(),
+		erstelltVon: uuid('erstellt_von').references(() => users.id, { onDelete: 'set null' }),
+		erstelltAm: timestamp('erstellt_am', { withTimezone: true }).notNull().defaultNow(),
+		geaendertAm: timestamp('geaendert_am', { withTimezone: true }).notNull().defaultNow()
+	},
+	(t) => [unique('gespeicherte_berichte_name_unique').on(t.householdId, t.name)]
+);

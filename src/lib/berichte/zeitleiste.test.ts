@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	zeitraumName, blaetterZiele, wechsleArt, vergleichsZeitraeume, verlaufsAchse, ladeFenster,
-	monatImZeitraum, zeitwahlKacheln, jahresAuswahl, vergleichText, adresse, leerText
+	monatImZeitraum, zeitwahlKacheln, jahresAuswahl, vergleichText, adresse, leerText, zurueckZumBericht
 } from './zeitleiste';
 import { leererFilter } from './filter';
 
@@ -208,5 +208,26 @@ describe('leerText', () => {
 			text: 'Für September 2026 gibt es keinen passenden bestätigten Bon.',
 			zurueck: { text: 'Ohne Filter zeigen', filter: f }
 		});
+	});
+});
+
+// Abschlusspruefung Stufe 2: der Link zurueck zum Bericht loeschte Laden und Kategorie des
+// BERICHTS und den aktiven gespeicherten Bericht. Der Bericht gibt seine Adresse jetzt mit.
+describe('zurueckZumBericht', () => {
+	const f = leererFilter({ art: 'monat', monat: '2026-09' });
+	const B = '3f2a0b7c-1111-2222-3333-444444444444';
+
+	it('fuehrt zur mitgegebenen Berichtsadresse samt gespeichertem Bericht', () => {
+		expect(zurueckZumBericht(`zeitraum=monat&monat=2026-08&laden=ohne&bericht=${B}`, f, HEUTE)).toBe(
+			`/reports?zeitraum=monat&monat=2026-08&laden=ohne&bericht=${B}`
+		);
+	});
+
+	it('laesst Unbrauchbares in der Ruecksprungadresse weg', () => {
+		expect(zurueckZumBericht('zeitraum=monat&monat=2026-08&laden=kaputt&bericht=x', f, HEUTE)).toBe('/reports?zeitraum=monat&monat=2026-08');
+	});
+
+	it('faellt ohne Ruecksprungadresse auf den Bericht ohne Laden und Kategorie zurueck', () => {
+		expect(zurueckZumBericht(null, { ...f, kategorie: ['obst'], suche: 'x' }, HEUTE)).toBe('/reports?zeitraum=monat&monat=2026-09&suche=x');
 	});
 });

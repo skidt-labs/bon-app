@@ -1,27 +1,34 @@
 <script lang="ts">
 	import Seite from '$lib/client/geruest/Seite.svelte';
 	import Zeitleiste from '$lib/client/berichte/Zeitleiste.svelte';
+	import Filterleiste from '$lib/client/berichte/Filterleiste.svelte';
+	import Filterwahl from '$lib/client/berichte/Filterwahl.svelte';
+	import Gespeichert from '$lib/client/berichte/Gespeichert.svelte';
+	import { filterAlsAdresse, hatFilter, wirktAufPositionen } from '$lib/berichte/filter';
 	import { formatCents } from '$lib/money';
 	import { adresse, leerText, monatImZeitraum, vergleichText, zeitraumName } from '$lib/berichte/zeitleiste';
 	import { monatsKurz, monatsName } from '$lib/berichte/kalender';
 	import type { BerichtFilter } from '$lib/berichte/filter';
 
-	let { data } = $props();
+	let { data, form } = $props();
 
 	const name = $derived(zeitraumName(data.filter.zeitraum));
 	const k = $derived(data.kennzahlen);
 	const leer = $derived(k.bons === 0);
 	const leerHinweis = $derived(leerText(data.filter));
 	const zeitraum = $derived(data.filter.zeitraum);
+	/** Ein geoeffneter gespeicherter Bericht bleibt beim Blaettern und Filtern „aktiv". */
+	const zusatz = $derived<Record<string, string>>(data.aktiv ? { bericht: data.aktiv.id } : {});
 
 	/** Der groesste Balken gibt den Massstab — sonst sagt die Laenge nichts. */
 	const maxKategorie = $derived(Math.max(1, ...data.kategorien.map((x) => Math.abs(x.cents))));
 	const maxHaendler = $derived(Math.max(1, ...data.haendler.map((x) => Math.abs(x.cents))));
 	const maxVerlauf = $derived(Math.max(1, ...data.verlauf.flatMap((x) => [x.cents, x.vorjahrCents ?? 0])));
 
-	const bonsLink = (zusatz: Partial<BerichtFilter>) =>
-		adresse('/reports/bons', { ...data.filter, laden: [], kategorie: [], ...zusatz });
-	const monatLink = (monat: string) => adresse('/reports', { ...data.filter, zeitraum: { art: 'monat', monat } });
+	const rueckweg = $derived(filterAlsAdresse(data.filter) + (data.aktiv ? `&bericht=${data.aktiv.id}` : ''));
+	const bonsLink = (zusatzFilter: Partial<BerichtFilter>) =>
+		adresse('/reports/bons', { ...data.filter, ...zusatzFilter }, { zurueck: rueckweg });
+	const monatLink = (monat: string) => adresse('/reports', { ...data.filter, zeitraum: { art: 'monat', monat } }, zusatz);
 
 	const UEBERSCHRIFT = 'text-[10.5px] font-bold tracking-[0.08em] text-gedaempft uppercase';
 	const KARTE = 'rounded-2xl bg-papier px-5 py-4 shadow-[0_0_0_1px_var(--color-linie)]';
@@ -34,7 +41,12 @@
 		{/if}
 	{/snippet}
 
-	<Zeitleiste filter={data.filter} heute={data.heute} pfad="/reports" monatsSummen={data.monatsSummen} />
+	<Gespeichert gespeicherte={data.gespeicherte} aktiv={data.aktiv} filter={data.filter} fehler={form?.grund ?? null} />
+	<Zeitleiste filter={data.filter} heute={data.heute} pfad="/reports" monatsSummen={data.monatsSummen} {zusatz} />
+	<Filterleiste filter={data.filter} namen={data.namen} pfad="/reports" {zusatz} />
+	{#if data.wahl}
+		<Filterwahl filter={data.filter} wahl={data.wahl} optionen={data.optionen} pfad="/reports" {zusatz} />
+	{/if}
 
 	{#each data.hinweise as hinweis (hinweis)}
 		<p class="mb-3 rounded-xl bg-bernstein-flaeche px-3.5 py-2.5 text-[13px] font-semibold text-bernstein">{hinweis}</p>
@@ -63,6 +75,9 @@
 			<div class={KARTE}>
 				<span class={UEBERSCHRIFT}>Ausgaben</span>
 				<b class="mt-0.5 block text-[30px] leading-none font-extrabold tabular-nums">{formatCents(k.summe)} €</b>
+				<p class="mt-1 text-[11.5px] text-gedaempft">
+					{wirktAufPositionen(data.filter) ? 'Summe der passenden Positionen' : 'Summe der Bons'}
+				</p>
 				<!-- Vergleiche mit Vorzeichen UND Wort; die Farbe ist nur Zugabe. -->
 				{#each data.vergleiche as v (v.bezeichnung)}
 					<p
@@ -77,6 +92,9 @@
 			<div class={KARTE}>
 				<span class={UEBERSCHRIFT}>Bons</span>
 				<b class="mt-0.5 block text-[30px] leading-none font-extrabold tabular-nums">{k.bons}</b>
+				{#if k.positionen !== null}
+					<p class="mt-1.5 text-[12.5px] text-gedaempft">{k.positionen} {k.positionen === 1 ? 'Position' : 'Positionen'}</p>
+				{/if}
 				{#if data.ohneBetrag > 0}
 					<p class="mt-1.5 text-[12.5px] text-bernstein">{data.ohneBetrag} ohne erkannte Endsumme</p>
 				{/if}
@@ -109,7 +127,7 @@
 
 		<!-- ============ Verlauf ============ -->
 		<section class="mt-6 {KARTE}">
-			<h2 class={UEBERSCHRIFT}>Verlauf — bestätigte Ausgaben</h2>
+			<h2 class={UEBERSCHRIFT}>Verlauf — bestätigte Ausgaben{hatFilter(data.filter) ? ' (gefiltert)' : ''}</h2>
 			<ol class="mt-3 flex items-end gap-1.5">
 				{#each data.verlauf as v (v.monat)}
 					{@const aktiv = monatImZeitraum(v.monat, zeitraum)}

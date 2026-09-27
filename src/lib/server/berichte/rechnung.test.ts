@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-	nachKategorie, nachHaendler, budgetstand, direkteCentsJeKategorie, passendePositionen,
+	nachKategorie, nachHaendler, budgetstand, direkteCentsJeKategorie,
 	kategorienAufloesen, summeJeBon, vergleichMit, verlaufRechnen, budgetImJahr
 } from './rechnung';
 
@@ -221,20 +221,6 @@ describe('direkteCentsJeKategorie', () => {
 
 const P = (receiptId: string, categoryId: string | null, cents: number, lineType = 'article') =>
 	({ receiptId, categoryId, totalPriceCents: cents, lineType }) as const;
-
-describe('passendePositionen', () => {
-	it('nimmt Geldzeilen der gewaehlten Kategorien, keine Infozeilen', () => {
-		const zeilen = [P('b1', 'brot', 300), P('b1', 'brot', 0, 'info'), P('b1', 'obst', 200), P('b2', null, 100)];
-		expect(passendePositionen(zeilen, new Set(['brot']))).toEqual([P('b1', 'brot', 300)]);
-	});
-
-	// Rabatt und Pfand tragen ihr Vorzeichen und zaehlen in IHRER Kategorie. Ein Obst-Rabatt,
-	// der per applies_to_line am Brot haengt, macht das Brot nicht billiger.
-	it('zaehlt eine Rabattzeile nur, wenn sie selbst die Kategorie traegt', () => {
-		const zeilen = [P('b1', 'brot', 300), P('b1', 'brot', -50, 'discount'), P('b1', 'obst', -30, 'discount')];
-		expect(passendePositionen(zeilen, new Set(['brot'])).map((z) => z.totalPriceCents)).toEqual([300, -50]);
-	});
-});
 
 describe('kategorienAufloesen', () => {
 	const MIT_SLUG = [

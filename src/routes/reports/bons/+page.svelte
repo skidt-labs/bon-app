@@ -1,6 +1,8 @@
 <script lang="ts">
 	import Seite from '$lib/client/geruest/Seite.svelte';
 	import Zeitleiste from '$lib/client/berichte/Zeitleiste.svelte';
+	import Filterleiste from '$lib/client/berichte/Filterleiste.svelte';
+	import { hatFilter } from '$lib/berichte/filter';
 	import { adresse, zeitraumName } from '$lib/berichte/zeitleiste';
 	import { tagName } from '$lib/berichte/kalender';
 	import { formatCents } from '$lib/money';
@@ -9,11 +11,13 @@
 
 	const liste = $derived(data.liste);
 	// Vom Server, nicht aus der Adresse: eine unbekannte Kategorie filtert nicht.
-	const nachKategorie = $derived(data.liste?.nachKategorie ?? false);
-	const zusatz = $derived<Record<string, string>>(data.ansicht === 'position' ? { ansicht: 'position' } : {});
-	const zumBericht = $derived(adresse('/reports', { ...data.filter, laden: [], kategorie: [] }));
+	const nachKategorie = $derived(data.liste.nachPositionen);
+	// Ansicht und Rueckweg reisen bei jedem Link dieser Seite mit.
+	const rueck = $derived<Record<string, string>>(data.rueckweg ? { zurueck: data.rueckweg } : {});
+	const zusatz = $derived<Record<string, string>>({ ...(data.ansicht === 'position' ? { ansicht: 'position' } : {}), ...rueck });
+	const zumBericht = $derived(data.zumBericht);
 	const ansichtLink = (a: 'bon' | 'position') =>
-		adresse('/reports/bons', data.filter, a === 'position' ? { ansicht: 'position' } : {});
+		adresse('/reports/bons', data.filter, a === 'position' ? { ansicht: 'position', ...rueck } : rueck);
 	const kategorieLink = (slug: string) => adresse('/reports/bons', { ...data.filter, kategorie: [slug] }, zusatz);
 	const positionen = $derived(
 		liste
@@ -30,7 +34,7 @@
 </script>
 
 <Seite
-	titel={liste?.titel ? `Bons zu ${liste.titel}` : 'Bons'}
+	titel={liste.titel ? `Bons zu ${liste.titel}` : 'Bons zur Auswahl'}
 	untertitel={zeitraumName(data.filter.zeitraum)}
 	haushalt={data.haushalt}
 	nutzer={data.user?.displayName ?? null}
@@ -38,12 +42,13 @@
 	<p class="mb-3 text-[13px]"><a href={zumBericht} class="font-semibold text-tuerkis-dunkel">‹ Zum Bericht</a></p>
 
 	<Zeitleiste filter={data.filter} heute={data.heute} pfad="/reports/bons" monatsSummen={data.monatsSummen} {zusatz} />
+	<Filterleiste filter={data.filter} namen={liste.namen} pfad="/reports/bons" {zusatz} mitAuswahl={false} />
 
 	{#each data.hinweise as hinweis (hinweis)}
 		<p class="mb-3 rounded-xl bg-bernstein-flaeche px-3.5 py-2.5 text-[13px] font-semibold text-bernstein">{hinweis}</p>
 	{/each}
 
-	{#if liste}
+	{#if hatFilter(data.filter)}
 		{#if liste.oberkategorie}
 			<p class="mb-3 text-[13px]">
 				<a href={kategorieLink(liste.oberkategorie.slug)} class="font-semibold text-tuerkis-dunkel">Alles in {liste.oberkategorie.name} ›</a>

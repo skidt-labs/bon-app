@@ -1,5 +1,5 @@
 import { formatCents } from '$lib/money';
-import { filterAlsAdresse, zeitraumTage, type BerichtFilter, type Zeitraum } from './filter';
+import { filterAlsAdresse, filterAusAdresse, hatFilter, ohneFilter, zeitraumTage, type BerichtFilter, type Zeitraum } from './filter';
 import {
 	ersterTag, jahrVon, jahrePlus, letzterTag, monatPlus, monatVon, monatsKurz, monatsName, tagName,
 	tagPlus, tageZwischen
@@ -164,10 +164,10 @@ export function adresse(pfad: string, f: BerichtFilter, zusatz: Record<string, s
  */
 export function leerText(f: BerichtFilter): { text: string; zurueck: { text: string; filter: BerichtFilter } | null } {
 	const name = zeitraumName(f.zeitraum);
-	if (f.laden.length > 0 || f.kategorie.length > 0) {
+	if (hatFilter(f)) {
 		return {
 			text: `Für ${name} gibt es keinen passenden bestätigten Bon.`,
-			zurueck: { text: 'Ohne Filter zeigen', filter: { ...f, laden: [], kategorie: [] } }
+			zurueck: { text: 'Ohne Filter zeigen', filter: ohneFilter(f) }
 		};
 	}
 	if (f.umfang === 'meine') {
@@ -177,4 +177,19 @@ export function leerText(f: BerichtFilter): { text: string; zurueck: { text: str
 		};
 	}
 	return { text: `Für ${name} ist noch kein Bon bestätigt.`, zurueck: null };
+}
+
+const BERICHT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Der Weg von „Bons zu …" zurueck zum Bericht. Der Bericht gibt seine eigene Adresse als
+ * `zurueck` mit — seit Stufe 2 kann er selbst nach Laden oder Kategorie gefiltert und ein
+ * gespeicherter Bericht sein; beides ging beim Zuruecklaufen sonst verloren. Die Adresse
+ * wird wie jede andere geprueft. Ohne sie: der Bericht ohne Laden und Kategorie.
+ */
+export function zurueckZumBericht(roh: string | null, ersatz: BerichtFilter, heute: string): string {
+	if (roh === null || roh === '') return adresse('/reports', { ...ersatz, laden: [], kategorie: [] });
+	const p = new URLSearchParams(roh);
+	const bericht = p.get('bericht');
+	return adresse('/reports', filterAusAdresse(p, heute).filter, bericht && BERICHT_ID.test(bericht) ? { bericht } : {});
 }

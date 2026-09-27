@@ -178,17 +178,6 @@ export function budgetstand(
 	});
 }
 
-/**
- * Welche Positionen ein Kategoriefilter trifft: Geldzeilen, deren EIGENE Kategorie
- * gewaehlt ist. Rabatt und Pfand zaehlen damit dort, wo sie selbst stehen — dieselbe
- * Regel wie in nachKategorie, damit Filter und Aufschluesselung dieselbe Zahl zeigen.
- */
-export function passendePositionen<T extends PostenZeile>(zeilen: T[], kategorieIds: Set<string>): T[] {
-	return zeilen.filter(
-		(z) => MONETAER.includes(z.lineType as LineType) && z.categoryId !== null && kategorieIds.has(z.categoryId)
-	);
-}
-
 /** Slugs → Ids; eine Oberkategorie schliesst ihre Kinder ein. Unbekanntes kommt getrennt zurueck. */
 export function kategorienAufloesen(
 	slugs: string[],

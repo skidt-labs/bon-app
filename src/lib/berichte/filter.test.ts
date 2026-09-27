@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
 	filterAusAdresse, filterAlsAdresse, wirktAufPositionen, budgetsNichtZeigbar,
-	leererFilter, zeitraumTage
+	leererFilter, zeitraumTage, hatFilter, ohneMerkmal, ohneFilter, merkmalParameter, zeitraumParameter
 } from './filter';
 
 const HEUTE = '2026-09-25';
@@ -95,10 +95,11 @@ describe('filterAusAdresse: Umfang und Merkmale', () => {
 		expect(hinweise).toHaveLength(1);
 	});
 
-	it('meldet Filter der Stufe 2, statt sie still zu uebergehen', () => {
-		const { hinweise } = lies('suche=kaffee&person=x');
-		expect(hinweise).toHaveLength(2);
-		expect(hinweise.join(' ')).toContain('suche');
+	it('meldet unbrauchbare Werte der neuen Merkmale', () => {
+		expect(lies('betrag=viel').hinweise).toHaveLength(1);
+		expect(lies('sicht=alle').hinweise).toHaveLength(1);
+		expect(lies('person=x').hinweise).toHaveLength(1);
+		expect(lies('topf=x').hinweise).toHaveLength(1);
 	});
 });
 
@@ -172,5 +173,101 @@ describe('filterAusAdresse: Hinweise', () => {
 	it('meldet dasselbe nur einmal', () => {
 		expect(lies('laden=x,x').hinweise).toHaveLength(1);
 		expect(lies('kategorie=A,A&laden=x').hinweise).toHaveLength(2);
+	});
+});
+
+describe('filterAusAdresse: Merkmale der Stufe 2', () => {
+	const U2 = '9d1e2f3a-5555-6666-7777-888888888888';
+
+	it('liest Person und Topf als Id-Listen', () => {
+		expect(lies(`person=${UUID},${U2}`).filter.person).toEqual([UUID, U2]);
+		expect(lies(`topf=${U2.toUpperCase()}`).filter.topf).toEqual([U2]);
+	});
+
+	it('nimmt „ohne" als Laden und „unsortiert" als Kategorie', () => {
+		expect(lies(`laden=${UUID},ohne`).filter.laden).toEqual([UUID, 'ohne']);
+		expect(lies('kategorie=unsortiert').filter.kategorie).toEqual(['unsortiert']);
+	});
+
+	// Checkboxen derselben Gruppe schicken den Namen mehrfach: laden=a&laden=b.
+	it('versteht wiederholte Parameter wie eine Kommaliste', () => {
+		expect(lies(`laden=${UUID}&laden=ohne`).filter.laden).toEqual([UUID, 'ohne']);
+	});
+
+	it('liest Betragsspannen in Cent', () => {
+		expect(lies('betrag=ab:5000').filter.betrag).toEqual({ ab: 5000, bis: null });
+		expect(lies('betrag=bis:2000').filter.betrag).toEqual({ ab: null, bis: 2000 });
+		expect(lies('betrag=2000-5000').filter.betrag).toEqual({ ab: 2000, bis: 5000 });
+		expect(lies('betrag=5000-2000')).toMatchObject({ filter: { betrag: { ab: 2000, bis: 5000 } }, hinweise: [expect.stringContaining('getauscht')] });
+	});
+
+	it('liest Betraege aus dem Formular in Euro', () => {
+		expect(lies('betrag_ab=50&betrag_bis=').filter.betrag).toEqual({ ab: 5000, bis: null });
+		expect(lies('betrag_ab=12,5&betrag_bis=99.99').filter.betrag).toEqual({ ab: 1250, bis: 9999 });
+		expect(lies('betrag_ab=&betrag_bis=').filter.betrag).toBeNull();
+		expect(lies('betrag_ab=zehn').hinweise).toHaveLength(1);
+	});
+
+	it('liest die Suche getrimmt und begrenzt', () => {
+		expect(lies('suche=%20Kaffee%20').filter.suche).toBe('Kaffee');
+		expect(lies('suche=').filter.suche).toBeNull();
+		const lang = lies(`suche=${'a'.repeat(150)}`);
+		expect(lang.filter.suche).toHaveLength(100);
+		expect(lang.hinweise).toHaveLength(1);
+	});
+
+	it('liest geteilt/privat, leer heisst beides', () => {
+		expect(lies('sicht=privat').filter.sicht).toBe('privat');
+		expect(lies('sicht=').filter.sicht).toBeNull();
+		expect(lies('sicht=').hinweise).toEqual([]);
+	});
+
+	it('schreibt alle Merkmale kanonisch zurueck', () => {
+		for (const x of [
+			`zeitraum=monat&monat=2026-09&person=${UUID}&betrag=ab:5000&topf=${U2}&suche=Kaffee%20Crema&sicht=geteilt`,
+			'zeitraum=jahr&jahr=2025&laden=ohne&kategorie=unsortiert&betrag=2000-5000',
+			'zeitraum=monat&monat=2026-09&betrag=bis:2000'
+		]) {
+			expect(filterAlsAdresse(lies(x).filter)).toBe(x);
+		}
+	});
+});
+
+describe('hatFilter / ohneMerkmal / ohneFilter', () => {
+	const f = leererFilter({ art: 'monat', monat: '2026-09' });
+
+	it('erkennt jedes Merkmal, aber nicht Zeitraum und Umfang', () => {
+		expect(hatFilter(f)).toBe(false);
+		expect(hatFilter({ ...f, umfang: 'meine' })).toBe(false);
+		for (const g of [{ laden: ['ohne'] }, { person: [UUID] }, { betrag: { ab: 1, bis: null } }, { topf: [UUID] }, { suche: 'x' }, { sicht: 'privat' as const }]) {
+			expect(hatFilter({ ...f, ...g })).toBe(true);
+		}
+	});
+
+	it('entfernt ein Merkmal oder alle, Zeitraum und Umfang bleiben', () => {
+		const voll = { ...f, umfang: 'meine' as const, laden: [UUID], suche: 'x' };
+		expect(ohneMerkmal(voll, 'laden')).toEqual({ ...voll, laden: [] });
+		expect(ohneMerkmal(voll, 'suche')).toEqual({ ...voll, suche: null });
+		expect(ohneFilter(voll)).toEqual({ ...f, umfang: 'meine' });
+	});
+});
+
+describe('merkmalParameter / zeitraumParameter', () => {
+	it('trennt Merkmale (mit Umfang) vom Zeitraum', () => {
+		const { filter } = lies(`zeitraum=spanne&von=2026-03-01&bis=2026-03-31&umfang=meine&laden=${UUID}&suche=Kaffee Crema`);
+		expect(merkmalParameter(filter)).toEqual({ umfang: 'meine', laden: UUID, suche: 'Kaffee Crema' });
+		expect(zeitraumParameter(filter.zeitraum)).toEqual({ zeitraum: 'spanne', von: '2026-03-01', bis: '2026-03-31' });
+		expect(zeitraumParameter({ art: 'jahr', jahr: 2026 })).toEqual({ zeitraum: 'jahr', jahr: '2026' });
+	});
+});
+
+// Abschlusspruefung Stufe 2: slice() schnitt ein Emoji an der 100-Zeichen-Grenze in der
+// Mitte durch; encodeURIComponent warf dann URIError — die Seite endete in einem 500.
+describe('filterAusAdresse: lange Suche mit Emoji', () => {
+	it('kuerzt nach Zeichen, nicht nach UTF-16-Einheiten, und bleibt als Adresse schreibbar', () => {
+		const { filter } = lies(`suche=${encodeURIComponent('a'.repeat(99) + '\u{1F600}x')}`);
+		expect(Array.from(filter.suche ?? '')).toHaveLength(100);
+		expect(filter.suche?.endsWith('\u{1F600}')).toBe(true);
+		expect(() => filterAlsAdresse(filter)).not.toThrow();
 	});
 });

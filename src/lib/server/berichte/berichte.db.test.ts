@@ -14,7 +14,7 @@ import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { isNotNull } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { households, users, householdMembers, receipts, receiptItems, merchants, categories } from '$lib/server/db/schema';
+import { households, users, householdMembers, receipts, receiptItems, merchants, categories, budgets, budgetKategorien } from '$lib/server/db/schema';
 import { heutigerTag } from '$lib/server/zeit';
 import { leererFilter } from '$lib/berichte/filter';
 import { monatVon } from '$lib/berichte/kalender';
@@ -158,8 +158,103 @@ describe.skipIf(!RUN)('Berichte: Sichtbarkeit mit Filtern (live)', () => {
 
 				const unbekannt = await bonsZuFilter(tdb, k, { ...monat, kategorie: ['gibtsnicht'] });
 				expect(unbekannt.bons).toEqual([]);
-				expect(unbekannt.nachKategorie).toBe(false);
+				expect(unbekannt.nachPositionen).toBe(false);
 				expect(unbekannt.hinweise.join(' ')).toContain('gibtsnicht');
+
+				throw new Error('ROLLBACK_ABSICHT');
+			})
+		).rejects.toThrow('ROLLBACK_ABSICHT');
+	});
+
+	/*
+	 * Stufe 2: Person, Topf zum Kaufmonat, Suche, Unbekanntes aus gespeicherten Filtern und
+	 * der fremde private Topf. Alles in einer zurueckgerollten Transaktion.
+	 */
+	it('filtert nach Person, Topf, Suche — und laesst Fremdes und Unbekanntes mit Hinweis weg', async () => {
+		await expect(
+			db.transaction(async (tx) => {
+				const tdb = tx as unknown as typeof db;
+				const [h] = await tx.insert(households).values({ name: 'Berichtstest', slug: randomUUID() }).returning({ id: households.id });
+				const person = async (rolle: 'verwalter' | 'mitglied') => {
+					const [u] = await tx
+						.insert(users)
+						.values({ oidcSub: randomUUID(), email: `${randomUUID()}@example.invalid`, displayName: 'Testperson' })
+						.returning({ id: users.id });
+					await tx.insert(householdMembers).values({ householdId: h.id, userId: u.id, rolle });
+					return u.id;
+				};
+				const erika = await person('verwalter');
+				const max = await person('mitglied');
+				const [a, b] = await tx
+					.select({ id: categories.id, slug: categories.slug })
+					.from(categories)
+					.where(isNotNull(categories.parentId))
+					.limit(2);
+				const vorjahr = Number(heutigerTag().slice(0, 4)) - 1;
+				const bon = async (von: string, sichtbarkeit: 'geteilt' | 'privat', wann: Date, zeilen: [string, number, string | null, string?, number?][]) => {
+					const [r] = await tx
+						.insert(receipts)
+						.values({
+							householdId: h.id, uploadedBy: von, imagePath: 'test/erfunden.webp', thumbPath: 'test/erfunden-klein.webp',
+							sichtbarkeit, status: 'confirmed', purchasedAt: wann, totalGrossCents: zeilen.reduce((s, z) => s + z[1], 0)
+						})
+						.returning({ id: receipts.id });
+					await tx.insert(receiptItems).values(
+						zeilen.map(([rawText, cents, categoryId, lineType, appliesToLine], i) => ({
+							receiptId: r.id, lineNo: i + 1, rawText, totalPriceCents: cents, categoryId,
+							lineType: (lineType ?? 'article') as 'article', appliesToLine: appliesToLine ?? null
+						}))
+					);
+					return r.id;
+				};
+				// Maerz und September des Vorjahres: der Topf wechselt dazwischen seine Kategorie.
+				const maerz = await bon(erika, 'geteilt', new Date(`${vorjahr}-03-15T12:00:00Z`), [['Ware A', 1000, a.id]]);
+				const september = await bon(erika, 'geteilt', new Date(`${vorjahr}-09-15T12:00:00Z`), [['Ware A', 200, a.id], ['Ware B', 300, b.id]]);
+				const [topf] = await tx.insert(budgets).values({ householdId: h.id, name: 'Testtopf', sichtbarkeit: 'geteilt' }).returning({ id: budgets.id });
+				await tx.insert(budgetKategorien).values([
+					{ budgetId: topf.id, householdId: h.id, categoryId: a.id, giltAb: `${vorjahr}-01-01`, giltBis: `${vorjahr}-06-30`, eigentuemerId: null },
+					{ budgetId: topf.id, householdId: h.id, categoryId: b.id, giltAb: `${vorjahr}-07-01`, giltBis: null, eigentuemerId: null }
+				]);
+				const [fremderTopf] = await tx
+					.insert(budgets)
+					.values({ householdId: h.id, name: 'Privat von Max', sichtbarkeit: 'privat', eigentuemerId: max })
+					.returning({ id: budgets.id });
+
+				const heute = heutigerTag();
+				const alsErika = { haushaltId: h.id, nutzerId: erika, rolle: 'verwalter' as const };
+				const jahr = { ...leererFilter({ art: 'jahr', jahr: vorjahr }) };
+
+				// Topf zum Kaufmonat: Maerz zaehlt A (1000), September nur B (300).
+				const nachTopf = await berichtLaden(tdb, alsErika, { ...jahr, topf: [topf.id] }, heute);
+				expect(nachTopf.kennzahlen.summe).toBe(1300);
+				expect(nachTopf.kennzahlen.positionen).toBe(2);
+				void maerz;
+				void september;
+
+				// Suche mit Rabatt auf die gefundene Position, heute gekauft.
+				const monat = leererFilter({ art: 'monat', monat: monatVon(heute) });
+				await bon(erika, 'geteilt', new Date(), [['KAFFEE Crema', 500, null], ['Kaffeebohnen 1kg', 900, null], ['Rabatt', -100, null, 'discount', 2], ['Milch', 120, null]]);
+				const maxGeteilt = await bon(max, 'geteilt', new Date(), [['Brot', 250, null]]);
+				await bon(max, 'privat', new Date(), [['Kaffee geheim', 7000, null]]);
+				expect((await berichtLaden(tdb, alsErika, { ...monat, suche: 'kaffee' }, heute)).kennzahlen.summe).toBe(1300);
+				expect((await berichtLaden(tdb, alsErika, { ...monat, suche: "'; drop table receipts; --" }, heute)).kennzahlen.summe).toBe(0);
+
+				// Person: Max' geteilte Bons, nie seine privaten.
+				const nachMax = await bonsZuFilter(tdb, alsErika, { ...monat, person: [max] });
+				expect(nachMax.bons.map((x) => x.id)).toEqual([maxGeteilt]);
+
+				// Fremder privater Topf und unbekannte Ids: weggelassen, mit Hinweis, kein Fehler.
+				const kaputt = await berichtLaden(
+					tdb,
+					alsErika,
+					{ ...monat, topf: [fremderTopf.id], laden: [randomUUID()], person: [randomUUID()] },
+					heute
+				);
+				expect(kaputt.filter.topf).toEqual([]);
+				expect(kaputt.filter.laden).toEqual([]);
+				expect(kaputt.filter.person).toEqual([]);
+				expect(kaputt.hinweise).toHaveLength(3);
+				expect(kaputt.kennzahlen.summe).toBe(1300 + 120 + 250);
 
 				throw new Error('ROLLBACK_ABSICHT');
 			})

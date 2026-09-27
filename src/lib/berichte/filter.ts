@@ -4,8 +4,8 @@ import {
 
 /**
  * Was ein Bericht zeigt — vollstaendig in der Adresse, damit Zurueck-Knopf, Lesezeichen
- * und geteilte Links ohne eigenen Speicher funktionieren. Ein gespeicherter Bericht
- * (Stufe 2) ist im Kern eine benannte Adresse.
+ * und geteilte Links ohne eigenen Speicher funktionieren. Ein gespeicherter Bericht ist im
+ * Kern eine benannte Adresse (gespeichert.ts liest ihn ueber dieselbe Funktion).
  */
 export type Zeitraum =
 	| { art: 'monat'; monat: string } // 'YYYY-MM'
@@ -15,18 +15,27 @@ export type Zeitraum =
 export type BerichtFilter = {
 	zeitraum: Zeitraum;
 	umfang: 'haushalt' | 'meine';
-	/** merchant-Ids */
+	/** merchant-Ids; LADEN_UNBEKANNT = Bons ohne erkannten Laden */
 	laden: string[];
-	/** Kategorie-Slugs; eine Oberkategorie schliesst ihre Kinder ein. */
+	/** Kategorie-Slugs (Oberkategorie schliesst ihre Kinder ein); UNSORTIERT = ohne Kategorie */
 	kategorie: string[];
-	// Stufe 2 — im Typ schon da, in Stufe 1 immer leer.
+	/** user-Ids — wer den Bon erfasst hat */
 	person: string[];
-	betrag: { ab?: number; bis?: number } | null;
+	/** Bon-Betrag in Cent, beide Grenzen einschliesslich; null = kein Betragsfilter */
+	betrag: { ab: number | null; bis: number | null } | null;
+	/** budget-Ids; zaehlt die Kategorien des Topfs im Kaufmonat */
 	topf: string[];
+	/** Suchbegriff im Positionstext, ohne Gross/Klein und Akzente */
 	suche: string | null;
 	sicht: 'geteilt' | 'privat' | null;
 };
 
+export type Merkmal = 'laden' | 'kategorie' | 'person' | 'betrag' | 'topf' | 'suche' | 'sicht';
+export const MERKMALE: Merkmal[] = ['laden', 'kategorie', 'person', 'betrag', 'topf', 'suche', 'sicht'];
+
+export const LADEN_UNBEKANNT = 'ohne';
+export const UNSORTIERT = 'unsortiert';
+export const SUCHE_HOECHSTENS = 100;
 export const HOECHSTENS_JAHRE = 3;
 /**
  * Frueher gibt es in dieser App keine Kassenbons. Die Grenze haelt absurde Jahre wie 0500
@@ -37,8 +46,8 @@ export const FRUEHESTES_JAHR = 2000;
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
-/** Parameter, die erst Stufe 2 versteht. Sie werden gemeldet, nicht still uebergangen. */
-const STUFE_ZWEI = ['person', 'betrag', 'topf', 'suche', 'sicht', 'bericht'];
+const BETRAG = /^(?:ab:(\d+)|bis:(\d+)|(\d+)-(\d+))$/;
+const EURO = /^\d+(?:[.,]\d{1,2})?$/;
 
 export function leererFilter(zeitraum: Zeitraum): BerichtFilter {
 	return {
@@ -143,6 +152,10 @@ function zeitraumAus(p: URLSearchParams, heute: string, hinweise: string[]): Zei
 	return monatAus(p, heute, hinweise);
 }
 
+/**
+ * Eine Werteliste: kommagetrennt UND/ODER wiederholt (Kontrollkaestchen derselben Gruppe
+ * schicken den Namen mehrfach). Unbrauchbares wird je Wert einmal gemeldet.
+ */
 function listeAus(
 	p: URLSearchParams,
 	name: string,
@@ -150,11 +163,78 @@ function listeAus(
 	was: string,
 	hinweise: string[]
 ): string[] {
-	const roh = p.get(name);
-	if (roh === null) return [];
-	const teile = roh.split(',').map((t) => t.trim()).filter(Boolean);
-	for (const t of teile.filter((t) => !gueltig(t))) hinweise.push(`„${t}" ist ${was} — ignoriert.`);
+	const teile = p
+		.getAll(name)
+		.flatMap((w) => w.split(','))
+		.map((t) => t.trim())
+		.filter(Boolean);
+	for (const t of new Set(teile.filter((t) => !gueltig(t)))) hinweise.push(`„${t}" ist ${was} — ignoriert.`);
 	return [...new Set(teile.filter(gueltig))];
+}
+
+const idListe = (p: URLSearchParams, name: string, was: string, hinweise: string[]) =>
+	[...new Set(listeAus(p, name, (w) => UUID.test(w), was, hinweise).map((w) => w.toLowerCase()))];
+
+function euroAlsCent(roh: string): number | null {
+	const t = roh.trim();
+	if (!EURO.test(t)) return null;
+	return Math.round(Number(t.replace(',', '.')) * 100);
+}
+
+function betragAus(p: URLSearchParams, hinweise: string[]): BerichtFilter['betrag'] {
+	let ab: number | null = null;
+	let bis: number | null = null;
+	const roh = p.get('betrag');
+	if (roh !== null && roh !== '') {
+		const m = BETRAG.exec(roh);
+		if (!m) hinweise.push(`„${roh}" ist keine Betragsspanne — ignoriert.`);
+		else if (m[1] !== undefined) ab = Number(m[1]);
+		else if (m[2] !== undefined) bis = Number(m[2]);
+		else {
+			ab = Number(m[3]);
+			bis = Number(m[4]);
+		}
+	}
+	// Das Formular der Filterauswahl schickt Euro, die Adresse fuehrt Cent.
+	for (const [feld, setze] of [
+		['betrag_ab', (c: number) => (ab = c)],
+		['betrag_bis', (c: number) => (bis = c)]
+	] as const) {
+		const wert = p.get(feld)?.trim();
+		if (!wert) continue;
+		const c = euroAlsCent(wert);
+		if (c === null) hinweise.push(`„${wert}" ist kein Betrag — ignoriert.`);
+		else setze(c);
+	}
+	if (ab === null && bis === null) return null;
+	if (ab !== null && bis !== null && ab > bis) {
+		[ab, bis] = [bis, ab];
+		hinweise.push('Die Betragsgrenzen waren vertauscht — sie wurden getauscht.');
+	}
+	return { ab, bis };
+}
+
+function sucheAus(p: URLSearchParams, hinweise: string[]): string | null {
+	const roh = p.get('suche');
+	if (roh === null) return null;
+	const t = roh.trim();
+	if (t === '') return null;
+	// Nach ZEICHEN kuerzen, nicht nach UTF-16-Einheiten: slice() schnitt ein Emoji an der
+	// Grenze in der Mitte durch, und encodeURIComponent warf beim Bauen jedes Links (500).
+	const zeichen = Array.from(t);
+	if (zeichen.length > SUCHE_HOECHSTENS) {
+		hinweise.push(`Der Suchbegriff ist länger als ${SUCHE_HOECHSTENS} Zeichen — gesucht wird nach dem Anfang.`);
+		return zeichen.slice(0, SUCHE_HOECHSTENS).join('');
+	}
+	return t;
+}
+
+function sichtAus(p: URLSearchParams, hinweise: string[]): BerichtFilter['sicht'] {
+	const roh = p.get('sicht');
+	if (roh === null || roh === '') return null;
+	if (roh === 'geteilt' || roh === 'privat') return roh;
+	hinweise.push(`„${roh}" ist weder „geteilt" noch „privat" — ignoriert.`);
+	return null;
 }
 
 /**
@@ -175,37 +255,95 @@ export function filterAusAdresse(
 		hinweise.push(`„${umfangRoh}" ist kein Umfang — gezeigt wird der ganze Haushalt.`);
 	}
 
-	const laden = listeAus(p, 'laden', (w) => UUID.test(w), 'kein Laden', hinweise).map((w) => w.toLowerCase());
+	const laden = [
+		...new Set(
+			listeAus(p, 'laden', (w) => w === LADEN_UNBEKANNT || UUID.test(w), 'kein Laden', hinweise).map((w) => w.toLowerCase())
+		)
+	];
 	const kategorie = listeAus(p, 'kategorie', (w) => SLUG.test(w), 'keine Kategorie', hinweise);
+	const person = idListe(p, 'person', 'keine Person', hinweise);
+	const betrag = betragAus(p, hinweise);
+	const topf = idListe(p, 'topf', 'kein Topf', hinweise);
+	const suche = sucheAus(p, hinweise);
+	const sicht = sichtAus(p, hinweise);
 
-	for (const n of STUFE_ZWEI) {
-		if (p.has(n)) hinweise.push(`Der Filter „${n}" kommt erst noch — er wurde nicht angewendet.`);
-	}
+	// Jeder Hinweis nur einmal: die Seite schluesselt die Hinweise nach ihrem Text.
+	return {
+		filter: { zeitraum, umfang, laden, kategorie, person, betrag, topf, suche, sicht },
+		hinweise: [...new Set(hinweise)]
+	};
+}
 
-	// Jeder Hinweis nur einmal: „laden=x,x" meldete sonst zweimal dasselbe, und die Seite
-	// schluesselt die Hinweise nach ihrem Text.
-	return { filter: { ...leererFilter(zeitraum), umfang, laden: [...new Set(laden)], kategorie }, hinweise: [...new Set(hinweise)] };
+export function zeitraumParameter(z: Zeitraum): Record<string, string> {
+	if (z.art === 'monat') return { zeitraum: 'monat', monat: z.monat };
+	if (z.art === 'jahr') return { zeitraum: 'jahr', jahr: String(z.jahr) };
+	return { zeitraum: 'spanne', von: z.von, bis: z.bis };
+}
+
+function betragAlsText(b: NonNullable<BerichtFilter['betrag']>): string {
+	if (b.ab !== null && b.bis !== null) return `${b.ab}-${b.bis}`;
+	if (b.ab !== null) return `ab:${b.ab}`;
+	return `bis:${b.bis}`;
+}
+
+/** Die Merkmale (und „Nur meine") als Parameter, ohne Zeitraum — so speichert gespeichert.ts. */
+export function merkmalParameter(f: BerichtFilter): Record<string, string> {
+	const p: Record<string, string> = {};
+	if (f.umfang === 'meine') p.umfang = 'meine';
+	if (f.laden.length > 0) p.laden = f.laden.join(',');
+	if (f.kategorie.length > 0) p.kategorie = f.kategorie.join(',');
+	if (f.person.length > 0) p.person = f.person.join(',');
+	if (f.betrag !== null) p.betrag = betragAlsText(f.betrag);
+	if (f.topf.length > 0) p.topf = f.topf.join(',');
+	if (f.suche !== null) p.suche = f.suche;
+	if (f.sicht !== null) p.sicht = f.sicht;
+	return p;
 }
 
 /**
- * Die kanonische Adresse (ohne „?"). Kommata bleiben lesbar stehen: Ids, Slugs und Tage
- * enthalten keine Zeichen, die kodiert werden muessten.
+ * Die kanonische Adresse (ohne „?"). Kommata und Doppelpunkte bleiben lesbar stehen; nur
+ * die Suche wird kodiert, weil sie freien Text traegt.
  */
 export function filterAlsAdresse(f: BerichtFilter): string {
-	const teile: string[] = [`zeitraum=${f.zeitraum.art}`];
-	const z = f.zeitraum;
-	if (z.art === 'monat') teile.push(`monat=${z.monat}`);
-	else if (z.art === 'jahr') teile.push(`jahr=${z.jahr}`);
-	else teile.push(`von=${z.von}`, `bis=${z.bis}`);
-	if (f.umfang === 'meine') teile.push('umfang=meine');
-	if (f.laden.length > 0) teile.push(`laden=${f.laden.join(',')}`);
-	if (f.kategorie.length > 0) teile.push(`kategorie=${f.kategorie.join(',')}`);
-	return teile.join('&');
+	const teile = { ...zeitraumParameter(f.zeitraum), ...merkmalParameter(f) };
+	return Object.entries(teile)
+		.map(([k, v]) => `${k}=${k === 'suche' ? encodeURIComponent(v) : v}`)
+		.join('&');
 }
 
 /** Filter, die einzelne POSITIONEN auswaehlen statt ganzer Bons. */
 export function wirktAufPositionen(f: BerichtFilter): boolean {
 	return f.kategorie.length > 0 || f.suche !== null || f.topf.length > 0;
+}
+
+/** Ob irgendein Merkmal gesetzt ist. Zeitraum und „Nur meine" sind keine Filter. */
+export function hatFilter(f: BerichtFilter): boolean {
+	return (
+		f.laden.length > 0 ||
+		f.kategorie.length > 0 ||
+		f.person.length > 0 ||
+		f.betrag !== null ||
+		f.topf.length > 0 ||
+		f.suche !== null ||
+		f.sicht !== null
+	);
+}
+
+export function ohneMerkmal(f: BerichtFilter, m: Merkmal): BerichtFilter {
+	switch (m) {
+		case 'betrag':
+			return { ...f, betrag: null };
+		case 'suche':
+			return { ...f, suche: null };
+		case 'sicht':
+			return { ...f, sicht: null };
+		default:
+			return { ...f, [m]: [] };
+	}
+}
+
+export function ohneFilter(f: BerichtFilter): BerichtFilter {
+	return { ...leererFilter(f.zeitraum), umfang: f.umfang };
 }
 
 /**
@@ -219,6 +357,6 @@ export function wirktAufPositionen(f: BerichtFilter): boolean {
 export function budgetsNichtZeigbar(f: BerichtFilter): string | null {
 	if (f.umfang === 'meine') return 'Budgets gelten für den ganzen Haushalt — sie erscheinen unter „Haushalt".';
 	if (f.zeitraum.art === 'spanne') return 'Budgets gelten je Monat — sie erscheinen bei „Monat" und „Jahr".';
-	if (f.laden.length > 0 || wirktAufPositionen(f)) return 'Budgets erscheinen nur im ungefilterten Bericht.';
+	if (hatFilter(f)) return 'Budgets erscheinen nur im ungefilterten Bericht.';
 	return null;
 }

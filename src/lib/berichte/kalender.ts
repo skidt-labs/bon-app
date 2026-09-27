@@ -102,3 +102,10 @@ export function monatsKurz(monat: string): string {
 export function tagName(tag: string, mitJahr = true): string {
 	return (mitJahr ? TAG_MIT_JAHR : TAG_OHNE_JAHR).format(mittag(tag));
 }
+
+/** Alle Monate von `von` bis `bis`, beide eingeschlossen; leer, wenn `bis` davor liegt. */
+export function monateVonBis(von: string, bis: string): string[] {
+	const liste: string[] = [];
+	for (let m = von; m <= bis; m = monatPlus(m, 1)) liste.push(m);
+	return liste;
+}

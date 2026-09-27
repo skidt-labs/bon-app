@@ -211,6 +211,13 @@
       "when": 1790193191910,
       "tag": "0029_ki_anbieter",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1790342137624,
+      "tag": "0030_gespeicherte_berichte",
+      "breakpoints": true
     }
   ]
 }
