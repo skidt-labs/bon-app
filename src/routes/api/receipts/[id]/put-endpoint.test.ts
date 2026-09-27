@@ -234,6 +234,20 @@ describe('PUT /api/receipts/[id]', () => {
 		expect(mocks.original).not.toHaveBeenCalled();
 	});
 
+	it('nimmt beim Eintragen eines Fehlschlags den Kein-Bon-Hinweis heraus', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		await PUT(fakeEvent(rumpf()));
+		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(kopf?.set).toHaveProperty('needsReviewReason');
+	});
+
+	it('laesst die Beanstandungen beim blossen Zwischenspeichern eines Bons in Pruefung stehen', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'review' }];
+		await PUT(fakeEvent(rumpf()));
+		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(kopf?.set).not.toHaveProperty('needsReviewReason');
+	});
+
 	it('meldet 409, wenn sich der Status zwischen Laden und Schreiben geaendert hat', async () => {
 		// Etwa: jemand drueckt gleichzeitig „Erneut lesen", der Bon steht schon auf pending.
 		mocks.selectResult = [{ id: 'r1', status: 'failed' }];

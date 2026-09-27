@@ -1,7 +1,8 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
 	import { formatCents } from '$lib/money';
-	import { describeProblem, DOPPEL_GRUND } from '$lib/bons/beanstandungen';
+	import { describeProblem, DOPPEL_GRUND, KEIN_BON_CODES, keinBonCode } from '$lib/bons/beanstandungen';
+	import { dochEinBonAnfrage } from '$lib/client/bons/keinBon';
 	import { formatWann } from '$lib/bons/anzeige';
 	import Symbol from '$lib/client/geruest/Symbol.svelte';
 	import { erneutLesen } from '$lib/client/bons/erneutLesen';
@@ -97,6 +98,8 @@
 	const verworfen = $derived(data.receipt.status === 'doppelt');
 	/** Im Papierkorb: nur ansehen, zurueckholen oder endgueltig loeschen. */
 	const imPapierkorb = $derived(data.receipt.status === 'verworfen');
+	/** Sieht nicht wie ein Kassenbon aus (ocr/kein-bon.ts) — Band mit Verwerfen / Doch ein Bon. */
+	const keinBon = $derived(imPapierkorb ? null : keinBonCode(data.receipt.needsReviewReason));
 	/** Das vermutete Original liegt im Papierkorb — der Doppel-Hinweis muss das sagen. */
 	const originalImPapierkorb = $derived(data.original?.status === 'verworfen');
 	const offen = $derived(!verworfen && !imPapierkorb && (!bestaetigt || entriegelt));
@@ -147,7 +150,9 @@
 	const abw = $derived(abweichungenAus(zeilen, data.ocrZeilen));
 	// Ohne den Doppel-Hinweis: der steht ausfuehrlich im eigenen Band darueber.
 	const beanstandungen = $derived(
-		(data.receipt.needsReviewReason ?? []).filter((c) => c !== DOPPEL_GRUND).map(describeProblem)
+		(data.receipt.needsReviewReason ?? [])
+			.filter((c) => c !== DOPPEL_GRUND && !(KEIN_BON_CODES as readonly string[]).includes(c))
+			.map(describeProblem)
 	);
 	/** Zeilen, deren Menge × Einzelpreis nicht zum Gesamtbetrag passt — Hinweis, keine Sperre. */
 	const rechnungOffen = $derived(zeilen.filter((z) => rechenprobe(z) !== null).length);
@@ -355,6 +360,27 @@
 		if (aktion === 'verwerfen') return weiter(true);
 		if (aktion === 'loeschen') return goto('/receipts?status=papierkorb');
 		angezeigt = '';
+		await invalidateAll();
+	}
+
+	/**
+	 * „Doch ein Bon, lesen": ein fehlgeschlagener Bon wird ohne Vorpruefung neu gelesen — dann
+	 * gibt es hier nichts mehr zu tun; bei einem gelesenen faellt nur der Hinweis weg.
+	 */
+	async function dochEinBon() {
+		// Wie „Erneut lesen": wer schon eingetragen hat, wird gefragt, bevor das verloren geht.
+		if (data.receipt.status === 'failed' && begonnen && !confirm('Was du schon eingetragen hast, geht dabei verloren. Trotzdem neu lesen?')) return;
+		busy = true;
+		meldung = '';
+		const r = await dochEinBonAnfrage(data.receipt.id);
+		busy = false;
+		if (!r.ok) {
+			meldung = r.meldung;
+			return;
+		}
+		if (data.receipt.status === 'failed') return goto('/inbox');
+		// Nur neu laden, NICHT angezeigt zuruecksetzen: sonst waeren Korrekturen, die schon im
+		// Feld stehen, weg (Pruefung 27.09.2026). Der Hinweis kommt aus data.receipt.
 		await invalidateAll();
 	}
 
@@ -574,6 +600,32 @@
 				<div class="rounded-xl border border-linie bg-chip px-3.5 py-3 text-[13px] font-semibold text-gedaempft">
 					Im Papierkorb. Wird in {restTage(data.receipt.verworfenAm, new Date())} Tagen endgültig gelöscht, wenn du
 					ihn nicht wiederherstellst.
+				</div>
+			{/if}
+
+			{#if keinBon}
+				<div class="grid gap-2.5 rounded-xl border border-bernstein bg-bernstein-flaeche px-3.5 py-3 text-[13px]">
+					<p class="font-semibold text-bernstein">{describeProblem(keinBon)}</p>
+					<div class="flex flex-wrap gap-2">
+						{#if data.darfVerwerfen}
+							<button
+								type="button"
+								class="rounded-xl bg-bernstein px-3.5 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+								disabled={busy}
+								onclick={() => (rueckfrage = 'verwerfen')}>Verwerfen</button
+							>
+						{/if}
+						<!-- Bei „kaum Text" gibt es fuer das Modell nichts zu lesen — es wuerde einen Bon
+						     erfinden. Dann bleibt Eintragen von Hand (Pruefung 27.09.2026). -->
+						{#if keinBon !== 'kein_bon_leer'}
+							<button
+								type="button"
+								class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold disabled:opacity-60"
+								disabled={busy}
+								onclick={dochEinBon}>{data.receipt.status === 'failed' ? 'Doch ein Bon, lesen' : 'Doch ein Bon'}</button
+							>
+						{/if}
+					</div>
 				</div>
 			{/if}
 

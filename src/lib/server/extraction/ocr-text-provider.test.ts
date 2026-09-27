@@ -118,6 +118,22 @@ describe('createOcrTextProvider', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(0);
   });
 
+  // „Doch ein Bon, lesen" (Entwurf 2026-09-27-kein-bon): ein Mensch hat entschieden, dass
+  // es ein Bon ist — dann geht der Text trotz Vorpruefung an das Modell.
+  it('ueberspringt die Vorpruefung nur mit ohneVorpruefung', async () => {
+    const fetchImpl = fakeFetchGibt(JSON.stringify(basisAntwort(ZWEI_ARTIKEL)));
+    const provider = createOcrTextProvider({
+      baseUrl: 'https://example.test/v1',
+      apiKey: 'k',
+      model: 'm',
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      execFileImpl: execFileImplMitText(KAUDERWELSCH)
+    });
+
+    await provider.extract(Buffer.from('bild'), undefined, { ohneVorpruefung: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it('BonUnlesbarError trägt den OCR-Text und das Qualitätsurteil', async () => {
     const provider = createOcrTextProvider({
       baseUrl: 'https://example.test/v1',

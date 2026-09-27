@@ -322,6 +322,14 @@ export async function korrekturenAnwenden(
 					? { status: 'review' as const }
 					: {}),
 			...(ausFehlschlag ? { failureReason: null } : {}),
+			// Wer bestaetigt oder einen Fehlschlag von Hand eintraegt, hat entschieden, dass es ein
+			// Bon ist: der Kein-Bon-Hinweis faellt weg (Pruefung 27.09.2026). Der Doppel-Hinweis
+			// darunter ersetzt die Liste, wenn es einen gibt.
+			...(opts.bestaetigen || ausFehlschlag
+				? {
+						needsReviewReason: sql`nullif(${receipts.needsReviewReason} - 'kein_bon_leer'::text - 'kein_bon_ohne_preise'::text - 'kein_bon_kartenbeleg'::text, '[]'::jsonb)`
+					}
+				: {}),
 			...(opts.doppelVon ? { vermutetesOriginalId: opts.doppelVon, needsReviewReason: [DOPPEL_GRUND] } : {}),
 			/**
 			 * Die Sichtbarkeit folgt dem Schalter — aber nur in zwei Faellen:

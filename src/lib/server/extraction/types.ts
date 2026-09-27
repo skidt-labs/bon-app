@@ -147,5 +147,10 @@ export class ExtractionTruncatedError extends Error {
 export interface ExtractionProvider {
   readonly id: string;
   readonly model: string;
-  extract(image: Buffer, signal?: AbortSignal): Promise<ExtractionResult>;
+  /**
+   * `ohneVorpruefung`: ein Mensch hat „Doch ein Bon, lesen" gesagt (Entwurf
+   * 2026-09-27-kein-bon) — der Textweg schickt den OCR-Text dann trotz Vorpruefung an das
+   * Modell. Der Bildweg hat keine Vorpruefung und uebergeht die Angabe.
+   */
+  extract(image: Buffer, signal?: AbortSignal, opts?: { ohneVorpruefung?: boolean }): Promise<ExtractionResult>;
 }

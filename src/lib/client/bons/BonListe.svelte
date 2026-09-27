@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { formatCents } from '$lib/money';
-	import { describeProblem } from '$lib/bons/beanstandungen';
+	import { describeProblem, keinBonCode } from '$lib/bons/beanstandungen';
 	import { statusText, quelleText, formatWann, tagesgruppen } from '$lib/bons/anzeige';
 	import { invalidateAll } from '$app/navigation';
 	import { erneutLesen } from './erneutLesen';
@@ -25,7 +25,10 @@
 	const gruppen = $derived(tagesgruppen(zeilen));
 
 	function problemText(b: BonZeile): string {
-		if (b.status === 'failed') return b.failureReason ?? 'Auslesen fehlgeschlagen. Das Bild ist gespeichert.';
+		// Sieht es gar nicht wie ein Kassenbon aus, ist das die verstaendlichere Auskunft als
+		// der technische Grund der Vorpruefung.
+		const keinBon = keinBonCode(b.problems);
+		if (b.status === 'failed') return keinBon ? describeProblem(keinBon) : (b.failureReason ?? 'Auslesen fehlgeschlagen. Das Bild ist gespeichert.');
 		return (b.problems ?? []).map(describeProblem).join(' · ');
 	}
 
@@ -242,6 +245,10 @@
 								onclick={() => nochmal(b)}>{laufend[b.id] ? 'Wird eingereiht …' : 'Erneut lesen'}</button
 							>
 							<a href="/receipts/{b.id}" class="text-[13px] font-bold text-tuerkis-dunkel">Von Hand eintragen ›</a>
+							{#if b.darfVerwerfen && keinBonCode(b.problems)}
+								<!-- Sieht nicht wie ein Kassenbon aus: Verwerfen gleich hier, nicht erst im Menue. -->
+								<button type="button" class="text-[13px] font-bold text-rot-dunkel" disabled={laufend[b.id]} onclick={() => korb(b, 'verwerfen')}>Verwerfen</button>
+							{/if}
 							{#if meldungen[b.id]}<span class="text-sm text-rot-dunkel">{meldungen[b.id]}</span>{/if}
 						</div>
 					{/if}

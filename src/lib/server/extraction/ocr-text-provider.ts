@@ -242,7 +242,7 @@ export function createOcrTextProvider(opts: {
   return {
     id: anbieterId,
     model: opts.model,
-    async extract(image, signal) {
+    async extract(image, signal, extraOpts) {
       const ocrErgebnis = await ocr.lies(image, {
         timeoutMs: opts.ocrTimeoutMs,
         mitBoxen: opts.mitBoxen
@@ -270,7 +270,7 @@ export function createOcrTextProvider(opts: {
       // Prüfung geschickt, statt einen vierten Fall extra zu behandeln.
       const text = ocrErgebnis.status === 'gelesen' ? ocrErgebnis.text : '';
       const qualitaet = pruefeOcrQualitaet(text);
-      if (!qualitaet.brauchbar) {
+      if (!qualitaet.brauchbar && !extraOpts?.ohneVorpruefung) {
         throw new BonUnlesbarError(text, qualitaet, lauf, zeilen);
       }
 

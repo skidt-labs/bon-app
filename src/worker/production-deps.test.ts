@@ -566,6 +566,28 @@ describe('productionDeps — der Bon ist nicht mehr offen', () => {
 		expect(mocks.insertCalls.some((c) => c.table === extractionRuns)).toBe(false);
 	});
 
+	it('markFailed vermerkt „kein Kassenbon", wenn der OCR-Text danach aussieht', async () => {
+		const deps = productionDeps({ id: 'test', model: 'test-1', extract: vi.fn() });
+		await deps.markFailed('r1', 'Bon unlesbar', { ocrText: 'Sehr geehrte Damen und Herren, wir bestaetigen Ihren Termin.' });
+		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(kopf?.set).toMatchObject({ needsReviewReason: ['kein_bon_ohne_preise'] });
+	});
+
+	// Die Falle: ein leerer Text ist ein Beleg („nichts gelesen"), keine fehlende Angabe.
+	it('markFailed vermerkt „kaum Text" auch bei ganz leerem OCR-Text', async () => {
+		const deps = productionDeps({ id: 'test', model: 'test-1', extract: vi.fn() });
+		await deps.markFailed('r1', 'Bon unlesbar', { ocrText: '' });
+		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(kopf?.set).toMatchObject({ needsReviewReason: ['kein_bon_leer'] });
+	});
+
+	it('markFailed laesst die Beanstandungen leer, wenn es keinen OCR-Text gibt', async () => {
+		const deps = productionDeps({ id: 'test', model: 'test-1', extract: vi.fn() });
+		await deps.markFailed('r1', 'Modell nicht erreichbar');
+		const kopf = mocks.updateCalls.find((c) => c.table === receipts);
+		expect(kopf?.set).toMatchObject({ needsReviewReason: null });
+	});
+
 	it('markFailed schreibt keinen Lauf und meldet nichts, wenn der Bon nicht mehr offen ist', async () => {
 		mocks.updateReturning.push([]);
 		const deps = productionDeps({ id: 'test', model: 'test-1', extract: vi.fn() });

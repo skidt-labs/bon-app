@@ -136,7 +136,7 @@ describe('handleExtractJobs', () => {
     const d = deps({ provider: { id: 'test', model: 'test-1', extract } });
     const j = { ...job('r1'), signal: controller.signal };
     await handleExtractJobs([j] as never, d as never);
-    expect(extract).toHaveBeenCalledWith(expect.anything(), controller.signal);
+    expect(extract).toHaveBeenCalledWith(expect.anything(), controller.signal, { ohneVorpruefung: false });
   });
 
   // F3(a) aus der Review-Runde 1: die kompensierende markFailed-Schreibung darf
@@ -235,6 +235,36 @@ describe('handleExtractJobs', () => {
  * Bon antreffen, den ein Mensch schon fertig hat — etwa ein pg-boss-Nachversuch nach
  * einem gescheiterten markFailed. Dann darf der Worker nichts mehr anfassen.
  */
+describe('handleExtractJobs — kein Kassenbon', () => {
+  const KARTENBELEG = 'Kundenbeleg\nKartenzahlung girocard\nTerminal-ID 12345678\nBetrag EUR 1,09\nGenehmigung 123456';
+  const mitText = (ocrText: string | null) => ({
+    provider: { id: 'test', model: 'test-1', extract: vi.fn(async () => extraktionsErgebnis(extracted, { ocrText })) }
+  });
+
+  it('vermerkt einen gelesenen Kartenbeleg als Beanstandung', async () => {
+    const d = deps(mitText(KARTENBELEG));
+    await handleExtractJobs([job('r1')] as never, d as never);
+    expect(d.saveResult.mock.calls[0][0].problems).toContain('kein_bon_kartenbeleg');
+  });
+
+  it('vermerkt nichts, wenn ein Mensch „doch ein Bon" gesagt hat, und reicht das durch', async () => {
+    const d = deps(mitText(KARTENBELEG));
+    const j = { ...job('r1'), data: { receiptId: 'r1', ohneVorpruefung: true } };
+    await handleExtractJobs([j] as never, d as never);
+    expect(d.saveResult.mock.calls[0][0].problems).not.toContain('kein_bon_kartenbeleg');
+    // Pruefung 27.09.2026: ohne Vorpruefung kann das Modell einen Bon erfinden — der Mensch
+    // soll jede Zahl mit dem Bild vergleichen.
+    expect(d.saveResult.mock.calls[0][0].problems).toContain('ohne_vorpruefung');
+    expect((d.provider.extract as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][2]).toEqual({ ohneVorpruefung: true });
+  });
+
+  it('prueft beim Bildweg ohne OCR-Text nichts', async () => {
+    const d = deps(mitText(null));
+    await handleExtractJobs([job('r1')] as never, d as never);
+    expect(d.saveResult.mock.calls[0][0].problems.some((p: string) => p.startsWith('kein_bon'))).toBe(false);
+  });
+});
+
 describe('handleExtractJobs — Bon ist nicht mehr offen', () => {
   it('liest nicht, speichert nicht und meldet nichts, wenn loadImage null liefert', async () => {
     const d = deps({ loadImage: vi.fn(async () => null) });

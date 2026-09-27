@@ -23,8 +23,21 @@ export const PROBLEM_LABELS: Record<string, string> = {
 	// auch wenn Positionen da sind — siehe plausibility.ts.
 	missing_total: 'Keine Endsumme gelesen',
 	// Kein Befund aus checkPlausibility, sondern aus der Doppel-Erkennung (bons/doppelt.ts).
-	moeglicher_doppelbon: 'Sieht aus wie ein schon erfasster Bon'
+	moeglicher_doppelbon: 'Sieht aus wie ein schon erfasster Bon',
+	// Keine Befunde der Plausibilitaet, sondern der Kein-Bon-Erkennung (ocr/kein-bon.ts).
+	kein_bon_leer: 'Auf dem Bild ist kaum Text — sieht nicht wie ein Kassenbon aus.',
+	kein_bon_ohne_preise: 'Text ohne Preise — sieht nicht wie ein Kassenbon aus.',
+	kein_bon_kartenbeleg: 'Sieht aus wie ein Kartenbeleg, nicht wie ein Kassenbon.',
+	ohne_vorpruefung: 'Ohne Vorprüfung gelesen — jede Zahl mit dem Bild vergleichen.'
 };
+
+export const KEIN_BON_CODES = ['kein_bon_leer', 'kein_bon_ohne_preise', 'kein_bon_kartenbeleg'] as const;
+export type KeinBonCode = (typeof KEIN_BON_CODES)[number];
+
+/** Der Kein-Bon-Hinweis unter den Beanstandungen eines Bons, sonst null. */
+export function keinBonCode(gruende: string[] | null): KeinBonCode | null {
+	return (gruende ?? []).find((c): c is KeinBonCode => (KEIN_BON_CODES as readonly string[]).includes(c)) ?? null;
+}
 
 /**
  * Der Code des Doppel-Hinweises. Liegt hier und nicht in $lib/server/bons/doppelt.ts,

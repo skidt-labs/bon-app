@@ -207,9 +207,9 @@ export function wechselnderProvider(
 		get preise() {
 			return aktuell.preise;
 		},
-		async extract(image, signal) {
+		async extract(image, signal, opts) {
 			aktuell = await aufloesen();
-			return aktuell.provider.extract(image, signal);
+			return aktuell.provider.extract(image, signal, opts);
 		}
 	};
 }

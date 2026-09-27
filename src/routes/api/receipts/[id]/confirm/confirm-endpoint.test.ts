@@ -284,6 +284,16 @@ describe('POST /api/receipts/[id]/confirm', () => {
 		expect(set).not.toHaveProperty('confirmedAt');
 	});
 
+	// Pruefung 27.09.2026: wer bestaetigt, hat entschieden, dass es ein Bon ist — der Hinweis
+	// „sieht nicht wie ein Kassenbon aus" darf danach nicht stehen bleiben.
+	it('nimmt beim Bestaetigen den Kein-Bon-Hinweis heraus', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'review' }];
+		await POST(fakeEvent(rumpf()));
+		const set = mocks.updateCalls.find((c) => c.table === receipts)?.set as Record<string, unknown>;
+		expect(set).toHaveProperty('needsReviewReason');
+		expect(set.needsReviewReason).not.toBeNull();
+	});
+
 	it('verlangt bei einem fehlgeschlagenen Bon eine Endsumme', async () => {
 		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
 		let caught: unknown;

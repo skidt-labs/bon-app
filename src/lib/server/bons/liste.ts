@@ -270,7 +270,9 @@ export async function bonReaktivieren(
 ): Promise<{ id: string } | null> {
 	const [reactivated] = await db
 		.update(receipts)
-		.set({ status: 'pending', failureReason: null })
+		// Die Beanstandungen des gescheiterten Laufs gelten fuer den neuen nicht mehr — sonst
+		// stuende am wartenden Bon noch „sieht nicht wie ein Kassenbon aus" (Pruefung 27.09.2026).
+		.set({ status: 'pending', failureReason: null, needsReviewReason: null })
 		.where(and(eq(receipts.id, bonId), sichtbareBons(k), eq(receipts.status, 'failed')))
 		.returning({ id: receipts.id });
 	return reactivated ?? null;

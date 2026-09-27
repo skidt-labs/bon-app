@@ -16,6 +16,7 @@ import { preiseAusEnv, type Preise } from '$lib/server/ki/preise';
 export { preiseAusEnv, type Preise };
 import type { OcrLaufDaten, OcrZeileKurz } from '$lib/server/ocr/anbieter';
 import { ordneZeilenZu } from '$lib/server/ocr/zuordnung';
+import { keinKassenbon } from '$lib/server/ocr/kein-bon';
 import { getBoss, QUEUE_EXTRACT, type ExtractJob } from '$lib/server/queue/boss';
 import { readFile } from 'node:fs/promises';
 import { haendlerAufloesen } from '$lib/server/merchants';
@@ -177,15 +178,24 @@ export async function handleExtractJobs(
         console.warn(`[worker] Bon ${receiptId} ist nicht mehr in Bearbeitung, Job endet ohne Wirkung`);
         continue;
       }
+      const ohneVorpruefung = job.data.ohneVorpruefung === true;
       const { receipt: result, usage, raw, servedModel, warnings, ocrText, ocr, ocrZeilen } = await deps.provider.extract(
         image,
-        job.signal
+        job.signal,
+        { ohneVorpruefung }
       );
       // Aufgabenstellung Punkt 3: `warnings` (Entwurf E7, Aufgabe 2) war bisher nur
       // Transportweg — niemand sah sie. `needsReviewReason` ist der bestehende,
       // tatsächlich sichtbare Weg (Review-Ansicht, Posteingang); checkPlausibility
       // deckt Punkt 5 (fehlende Endsumme) bereits selbst über 'missing_total' ab.
       const problems = [...checkPlausibility(result, deps.now()), ...warnings];
+      // Kein Kassenbon? Nur beim Textweg (der Bildweg hat keinen OCR-Text) und nicht, wenn
+      // ein Mensch schon „Doch ein Bon" gesagt hat (Entwurf 2026-09-27-kein-bon).
+      const keinBon = ocrText !== null && !ohneVorpruefung ? keinKassenbon(ocrText) : null;
+      if (keinBon) problems.push(keinBon);
+      // Ohne Vorpruefung kann das Modell aus Kauderwelsch einen Bon erfinden (Pruefung
+      // 27.09.2026) — der Hinweis bittet, jede Zahl mit dem Bild zu vergleichen.
+      if (ohneVorpruefung) problems.push('ohne_vorpruefung');
       await deps.saveResult({
         receiptId,
         result,
@@ -646,8 +656,11 @@ export function productionDeps(
     },
 
     async markFailed(receiptId, reason, belege) {
+      // Scheiterte ein Bild an der Vorpruefung, steht sein OCR-Text in den Belegen — sieht er
+      // nicht wie ein Kassenbon aus, bekommt der Bon den Hinweis (Entwurf 2026-09-27-kein-bon).
+      const keinBon = belege?.ocrText != null ? keinKassenbon(belege.ocrText) : null;
       const getroffen = await db.update(receipts)
-        .set({ status: 'failed', failureReason: reason.slice(0, 500) })
+        .set({ status: 'failed', failureReason: reason.slice(0, 500), needsReviewReason: keinBon ? [keinBon] : null })
         .where(and(eq(receipts.id, receiptId), inArray(receipts.status, ['pending', 'extracting'])))
         .returning({ id: receipts.id });
       // Schon fertig (von Hand eingetragen, bestaetigt): kein Fehlschlag, keine Meldung.

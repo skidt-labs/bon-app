@@ -8,7 +8,8 @@ import { datenbankUrl } from '$lib/server/db/url';
 
 export const QUEUE_EXTRACT = 'extract-receipt';
 
-export type ExtractJob = { receiptId: string };
+/** `ohneVorpruefung`: „Doch ein Bon, lesen" — die Vorpruefung des OCR-Textes entfaellt. */
+export type ExtractJob = { receiptId: string; ohneVorpruefung?: boolean };
 
 /** Berichte Stufe 3: angeforderte Zusammenfassungen, zugestellt von bon-matrix. */
 export const QUEUE_MATRIX_BERICHT = 'matrix-bericht';
@@ -93,9 +94,10 @@ export async function getBoss(): Promise<PgBoss> {
  * höheres retryLimit wiederholt also nur noch echte "Mac gerade nicht da"-Fälle
  * öfter, keine dauerhaften.
  */
-export async function enqueueExtraction(receiptId: string): Promise<void> {
+export async function enqueueExtraction(receiptId: string, opts: { ohneVorpruefung?: boolean } = {}): Promise<void> {
 	const boss = await getBoss();
-	await boss.send(QUEUE_EXTRACT, { receiptId } satisfies ExtractJob, {
+	const job: ExtractJob = opts.ohneVorpruefung ? { receiptId, ohneVorpruefung: true } : { receiptId };
+	await boss.send(QUEUE_EXTRACT, job, {
 		retryLimit: 15,
 		retryDelay: 300,
 		retryBackoff: true,
