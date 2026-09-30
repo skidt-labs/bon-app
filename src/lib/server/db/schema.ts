@@ -320,6 +320,10 @@ export const receipts = pgTable(
 		verworfenAm: timestamp('verworfen_am', { withTimezone: true }),
 		verworfenVon: uuid('verworfen_von').references(() => users.id, { onDelete: 'set null' }),
 		statusVorVerwerfen: receiptStatus('status_vor_verwerfen'),
+		// Das unbearbeitete Foto, sobald jemand das Bild in der Pruefansicht bearbeitet hat
+		// (bons/bild.ts). null = nie bearbeitet; „Original wiederherstellen" setzt es zurueck.
+		originalImagePath: text('original_image_path'),
+		originalThumbPath: text('original_thumb_path'),
 		createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
 		confirmedAt: timestamp('confirmed_at', { withTimezone: true }),
 		confirmedBy: uuid('confirmed_by').references(() => users.id)

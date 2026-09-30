@@ -374,8 +374,16 @@ export async function mitgliedEntfernen(k: Zugriffskontext, zielUserId: string):
 					eq(receipts.sichtbarkeit, 'privat')
 				)
 			)
-			.returning({ imagePath: receipts.imagePath, thumbPath: receipts.thumbPath });
-		bilder = privateBons.flatMap((b) => [b.imagePath, b.thumbPath]);
+			.returning({
+				imagePath: receipts.imagePath,
+				thumbPath: receipts.thumbPath,
+				originalImagePath: receipts.originalImagePath,
+				originalThumbPath: receipts.originalThumbPath
+			});
+		// Auch das Original eines bearbeiteten Bons (bons/bild.ts).
+		bilder = privateBons.flatMap((b) =>
+			[b.imagePath, b.thumbPath, b.originalImagePath, b.originalThumbPath].filter((p): p is string => p !== null)
+		);
 
 		await tx
 			.delete(budgets)

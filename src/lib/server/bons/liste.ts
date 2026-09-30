@@ -1,4 +1,5 @@
 import { and, asc, count, desc, eq, exists, gte, ilike, inArray, lt, or, sql } from 'drizzle-orm';
+import { bildVersion } from '$lib/bons/anzeige';
 import type { db as Db } from '$lib/server/db';
 import { receipts, receiptItems } from '$lib/server/db/schema';
 import { monatsgrenzen } from '$lib/server/zeit';
@@ -36,6 +37,8 @@ export type BonZeile = {
 	verworfenAm: Date | null;
 	/** Darf dieser Mensch ihn verwerfen, zurueckholen, loeschen (darfBonVerwerfen)? */
 	darfVerwerfen: boolean;
+	/** Fuer die Bildadresse (`?v=`): aendert sich, wenn das Bild bearbeitet wird. */
+	bildVersion: string;
 };
 
 export type Zaehler = { brauchtDich: number; wirdGelesen: number; fehlgeschlagen: number; bestaetigt: number; papierkorb: number };
@@ -190,6 +193,7 @@ export async function listeLaden(
 				source: receipts.source,
 				uploadedBy: receipts.uploadedBy,
 				verworfenAm: receipts.verworfenAm,
+				imagePath: receipts.imagePath,
 				positionen: sql<number>`(select count(*)::int from ${receiptItems} where ${receiptItems.receiptId} = ${receipts.id})`
 			})
 			.from(receipts)
@@ -200,7 +204,11 @@ export async function listeLaden(
 	]);
 
 	return {
-		bons: roh.map(({ uploadedBy, ...b }) => ({ ...b, darfVerwerfen: darfBonVerwerfen(k, uploadedBy) })),
+		bons: roh.map(({ uploadedBy, imagePath, ...b }) => ({
+			...b,
+			darfVerwerfen: darfBonVerwerfen(k, uploadedBy),
+			bildVersion: bildVersion(imagePath)
+		})),
 		zaehler
 	};
 }

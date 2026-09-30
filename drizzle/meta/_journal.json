@@ -232,6 +232,13 @@
       "when": 1790519517097,
       "tag": "0032_papierkorb",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1790791825648,
+      "tag": "0033_bild_original",
+      "breakpoints": true
     }
   ]
 }

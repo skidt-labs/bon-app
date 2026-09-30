@@ -5,11 +5,14 @@
 
 	let {
 		bonId,
+		bildVersion,
 		zeilen,
 		gewaehlt,
 		onoeffnen
 	}: {
 		bonId: string;
+		/** Fuer die Bildadresse (`?v=`), siehe bildVersion in bons/anzeige.ts. */
+		bildVersion: string;
 		zeilen: OcrZeileKurz[] | null;
 		/** Index der OCR-Zeile, die gezeigt werden soll — oder null. */
 		gewaehlt: number | null;
@@ -78,7 +81,7 @@
 			aria-label="Bon im Vollbild öffnen"
 		>
 			<span class="relative block">
-				<img bind:this={bild} src="/receipts/{bonId}/image" alt="Der Bon" class="block w-full" onload={geladen} />
+				<img bind:this={bild} src="/receipts/{bonId}/image?v={bildVersion}" alt="Der Bon" class="block w-full" onload={geladen} />
 				{#if rahmen}
 					<span
 						class="pointer-events-none absolute rounded-[3px] border-2 border-tuerkis"

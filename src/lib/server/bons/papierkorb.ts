@@ -122,8 +122,16 @@ export async function bonsEndgueltigLoeschen(d: Verbindung, ids: string[]): Prom
 	const weg = await d
 		.delete(receipts)
 		.where(and(inArray(receipts.id, ids), eq(receipts.status, 'verworfen')))
-		.returning({ imagePath: receipts.imagePath, thumbPath: receipts.thumbPath });
-	await loescheBilder(weg.flatMap((b) => [b.imagePath, b.thumbPath]));
+		.returning({
+			imagePath: receipts.imagePath,
+			thumbPath: receipts.thumbPath,
+			originalImagePath: receipts.originalImagePath,
+			originalThumbPath: receipts.originalThumbPath
+		});
+	// Ein bearbeiteter Bon hat zwei Fassungen (bons/bild.ts) — beide gehen.
+	await loescheBilder(
+		weg.flatMap((b) => [b.imagePath, b.thumbPath, b.originalImagePath, b.originalThumbPath].filter((p): p is string => p !== null))
+	);
 	return weg.length;
 }
 

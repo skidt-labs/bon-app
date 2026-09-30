@@ -8,6 +8,9 @@
 	import { erneutLesen } from '$lib/client/bons/erneutLesen';
 	import { papierkorbAktion } from '$lib/client/bons/papierkorb';
 	import { restTage } from '$lib/bons/papierkorb';
+	import { bildVersion } from '$lib/bons/anzeige';
+	import { bildHochladen, originalHolen } from '$lib/client/bons/bild';
+	import BildBearbeiten from '$lib/client/bild/BildBearbeiten.svelte';
 	import Bonbild from './Bonbild.svelte';
 	import Bildstreifen from './Bildstreifen.svelte';
 	import Vollbild from './Vollbild.svelte';
@@ -45,6 +48,9 @@
 				failureReason: string | null;
 				/** Seit wann im Papierkorb — null ausserhalb. */
 				verworfenAm: string | Date | null;
+				imagePath: string;
+				/** Das unbearbeitete Foto, wenn das Bild bearbeitet wurde (bons/bild.ts). */
+				originalImagePath: string | null;
 			};
 			/** Das vermutete Original, sofern sichtbar — siehe bons/doppelt.ts. */
 			original: {
@@ -104,7 +110,14 @@
 	const originalImPapierkorb = $derived(data.original?.status === 'verworfen');
 	const offen = $derived(!verworfen && !imPapierkorb && (!bestaetigt || entriegelt));
 	/** Welche Rueckfrage gerade offen ist — in der Seite, weil confirm() hier nicht taugt. */
-	let rueckfrage = $state<null | 'verwerfen' | 'loeschen'>(null);
+	let rueckfrage = $state<null | 'verwerfen' | 'loeschen' | 'bild'>(null);
+	/** Das Foto im Bearbeiten-Bildschirm (bild/BildBearbeiten.svelte), sonst null. */
+	let bearbeitung = $state<HTMLImageElement | null>(null);
+	const version = $derived(bildVersion(data.receipt.imagePath));
+	/** Bearbeiten und neu lesen: nur fehlgeschlagene und zu pruefende Bons (Entscheidung 27.09.2026). */
+	const bildBearbeitbar = $derived(
+		data.darfVerwerfen && (data.receipt.status === 'failed' || data.receipt.status === 'review')
+	);
 	/**
 	 * Der Doppel-Hinweis ist offen, solange niemand „doppelt" oder „eigener Einkauf" gesagt
 	 * hat. Bis dahin sperrt der Server das Bestaetigen (confirm/+server.ts) — die Ansicht
@@ -384,6 +397,46 @@
 		await invalidateAll();
 	}
 
+	/** Nach der Rueckfrage: das Foto laden und den Bearbeiten-Bildschirm oeffnen. */
+	async function bildOeffnen() {
+		rueckfrage = null;
+		meldung = '';
+		const i = new Image();
+		i.src = `/receipts/${data.receipt.id}/image?v=${version}`;
+		try {
+			await i.decode();
+			bearbeitung = i;
+		} catch {
+			meldung = 'Das Bild ließ sich nicht laden.';
+		}
+	}
+
+	async function bildUebernehmen(blob: Blob) {
+		busy = true;
+		meldung = '';
+		const r = await bildHochladen(data.receipt.id, blob);
+		busy = false;
+		if (!r.ok) {
+			meldung = r.meldung;
+			return;
+		}
+		bearbeitung = null;
+		await goto('/inbox');
+	}
+
+	async function originalZurueck() {
+		rueckfrage = null;
+		busy = true;
+		meldung = '';
+		const r = await originalHolen(data.receipt.id);
+		busy = false;
+		if (!r.ok) {
+			meldung = r.meldung;
+			return;
+		}
+		await goto('/inbox');
+	}
+
 	async function bestaetigen() {
 		if (doppelOffen) {
 			meldung = 'Erst entscheiden: doppelt oder eigener Einkauf.';
@@ -556,6 +609,14 @@
 		{:else}
 			<span class="ml-auto hidden lg:block"></span>
 		{/if}
+		{#if bildBearbeitbar}
+			<button
+				type="button"
+				class="shrink-0 rounded-xl border border-linie bg-papier px-3 py-1.5 text-[13px] font-bold disabled:opacity-60"
+				disabled={busy}
+				onclick={() => (rueckfrage = 'bild')}><span class="hidden sm:inline">Bild bearbeiten</span><span class="sm:hidden">Bild</span></button
+			>
+		{/if}
 		{#if data.darfVerwerfen && !imPapierkorb}
 			<button
 				type="button"
@@ -573,6 +634,7 @@
 		<div class="lg:hidden">
 			<Bildstreifen
 				bonId={data.receipt.id}
+				bildVersion={version}
 				zeilen={data.ocrZeilen}
 				gewaehlt={bildZeile}
 				onoeffnen={() => (vollbild = true)}
@@ -581,6 +643,7 @@
 		<aside class="hidden min-h-0 border-r border-linie lg:block">
 			<Bonbild
 				bonId={data.receipt.id}
+				bildVersion={version}
 				zeilen={data.ocrZeilen}
 				gewaehlt={bildZeile}
 				onwaehlen={bildWaehlen}
@@ -798,10 +861,18 @@
 	>
 		<div class="grid w-full max-w-sm gap-3 rounded-2xl bg-papier p-5 text-[14px]">
 			<b id="rueckfrage-titel" class="text-[16px] font-extrabold">
-				{rueckfrage === 'verwerfen' ? 'Bon in den Papierkorb legen?' : 'Bon endgültig löschen?'}
+				{rueckfrage === 'verwerfen'
+					? 'Bon in den Papierkorb legen?'
+					: rueckfrage === 'bild'
+						? 'Bild bearbeiten?'
+						: 'Bon endgültig löschen?'}
 			</b>
 			<p class="text-gedaempft">
-				{#if rueckfrage === 'loeschen'}
+				{#if rueckfrage === 'bild'}
+					Nach dem Bearbeiten wird der Bon neu gelesen, die Positionen werden ersetzt.
+					{#if data.receipt.status === 'failed' && begonnen}Was du schon eingetragen hast, geht dabei verloren.{/if}
+					{#if data.receipt.originalImagePath}Das unbearbeitete Foto ist gespeichert und lässt sich zurückholen.{/if}
+				{:else if rueckfrage === 'loeschen'}
 					Bild und Daten sind danach weg. Das lässt sich nicht rückgängig machen.
 				{:else if bestaetigt}
 					Dieser Bon ist bestätigt. Im Papierkorb zählt er nicht mehr in Berichten und Budgets. 30 Tage lang kannst
@@ -810,12 +881,28 @@
 					30 Tage lang kannst du ihn wiederherstellen, danach wird er gelöscht.
 				{/if}
 			</p>
-			<div class="flex justify-end gap-2">
+			<div class="flex flex-wrap justify-end gap-2">
 				<button
 					type="button"
 					class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold"
 					onclick={() => (rueckfrage = null)}>Abbrechen</button
 				>
+				{#if rueckfrage === 'bild'}
+					{#if data.receipt.originalImagePath}
+						<button
+							type="button"
+							class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold disabled:opacity-60"
+							disabled={busy}
+							onclick={originalZurueck}>Original wiederherstellen</button
+						>
+					{/if}
+					<button
+						type="button"
+						class="rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+						disabled={busy}
+						onclick={bildOeffnen}>Bild bearbeiten</button
+					>
+				{:else}
 				<button
 					type="button"
 					class="rounded-xl bg-rot-dunkel px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
@@ -824,6 +911,7 @@
 				>
 					{rueckfrage === 'loeschen' ? 'Löschen' : 'In den Papierkorb'}
 				</button>
+				{/if}
 			</div>
 		</div>
 	</div>
@@ -831,9 +919,26 @@
 
 <svelte:window onkeydown={(e) => e.key === 'Escape' && rueckfrage !== null && (rueckfrage = null)} />
 
+{#if bearbeitung}
+	<!-- Bild bearbeiten (bons/bild.ts): derselbe Bildschirm wie beim Scannen. -->
+	<div class="fixed inset-0 z-50 overflow-y-auto bg-flaeche px-4 py-4" role="dialog" aria-modal="true" aria-label="Bild bearbeiten">
+		<div class="mx-auto grid max-w-xl gap-3">
+			<BildBearbeiten
+				bild={bearbeitung}
+				hauptText={busy ? 'Wird hochgeladen …' : 'Übernehmen und neu lesen'}
+				beschaeftigt={busy}
+				onfertig={bildUebernehmen}
+				onabbrechen={() => (bearbeitung = null)}
+			/>
+			{#if meldung}<p class="text-sm font-semibold text-rot-dunkel">{meldung}</p>{/if}
+		</div>
+	</div>
+{/if}
+
 {#if vollbild}
 	<Vollbild
 		bonId={data.receipt.id}
+				bildVersion={version}
 		zeilen={data.ocrZeilen}
 		gewaehlt={bildZeile}
 		onwaehlen={(i) => {

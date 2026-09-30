@@ -100,7 +100,7 @@
 								<!-- Ohne Bild waere ein fehlgeschlagener Bon nicht zu erkennen: kein Haendler,
 								     keine Summe, nur ein Fehlergrund (27.09.2026). -->
 								<a href="/receipts/{b.id}" class="flex items-center gap-2.5" aria-label="Bon ansehen und von Hand eintragen">
-									<img src="/receipts/{b.id}/image?vorschau" alt="" loading="lazy" class="h-12 w-9 shrink-0 rounded-md bg-chip object-cover object-top" />
+									<img src="/receipts/{b.id}/image?vorschau&v={b.bildVersion}" alt="" loading="lazy" class="h-12 w-9 shrink-0 rounded-md bg-chip object-cover object-top" />
 									<span>{b.merchant ?? 'Unbekannter Händler'}</span>
 								</a>
 							{:else}
@@ -182,7 +182,7 @@
 						     eigenen Stapelkontext, und das Menue-Blatt darin (fixed, z-50) lag unter der
 						     unteren Leiste und den folgenden Karten und war selbst durchscheinend. -->
 						{#if b.status === 'failed' || b.status === 'verworfen'}
-							<img src="/receipts/{b.id}/image?vorschau" alt="" loading="lazy" class="h-16 w-12 shrink-0 rounded-md bg-chip object-cover object-top" />
+							<img src="/receipts/{b.id}/image?vorschau&v={b.bildVersion}" alt="" loading="lazy" class="h-16 w-12 shrink-0 rounded-md bg-chip object-cover object-top" />
 						{/if}
 						<div class="min-w-0 flex-1">
 							<div class="flex items-baseline justify-between gap-3" class:pr-10={b.darfVerwerfen}>

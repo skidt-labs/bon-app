@@ -5,11 +5,14 @@
 
 	let {
 		bonId,
+		bildVersion,
 		zeilen,
 		gewaehlt,
 		onwaehlen
 	}: {
 		bonId: string;
+		/** Fuer die Bildadresse (`?v=`), siehe bildVersion in bons/anzeige.ts. */
+		bildVersion: string;
 		zeilen: OcrZeileKurz[] | null;
 		/** Index der hervorgehobenen Zeile, oder null. */
 		gewaehlt: number | null;
@@ -95,7 +98,7 @@
 			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 			<img
 				bind:this={bild}
-				src="/receipts/{bonId}/image"
+				src="/receipts/{bonId}/image?v={bildVersion}"
 				alt="Der Bon"
 				class="block w-full"
 				class:cursor-pointer={schwebt !== null}

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { defaultQuad, clampQuad, boundingBox, type Quad } from '$lib/client/crop';
+	import BildBearbeiten from '$lib/client/bild/BildBearbeiten.svelte';
 	import { enqueueUpload, flushOutbox, pendingCount, describeFlush, autoSyncMessage } from '$lib/client/outbox';
 	import { onMount } from 'svelte';
 	import Seite from '$lib/client/geruest/Seite.svelte';
@@ -12,15 +12,11 @@
 	}: { data: { user: { id: string; displayName: string } | null; haushalt: string | null } } = $props();
 	let file = $state<File | null>(null);
 	let img = $state<HTMLImageElement | null>(null);
-	let quad = $state<Quad | null>(null);
 	let busy = $state(false);
 	let message = $state('');
 	/** Beim Mehrfach-Upload warten die restlichen Fotos hier und kommen nacheinander dran. */
 	let pending = $state<File[]>([]);
 	let source = $state<'camera' | 'upload'>('camera');
-	/** Welche Ecke gerade gezogen wird - nicht `event.buttons`, das ist ein Maus-Idiom
-	    und liefert für Touch-Pointer je nach Browser keine verlässlichen Werte. */
-	let draggingIndex = $state<number | null>(null);
 	/** Fotos, die in der IndexedDB-Outbox auf einen (erneuten) Sendeversuch warten. */
 	let waiting = $state(0);
 
@@ -76,7 +72,6 @@
 		objectUrl = url;
 		img = image;
 		file = picked;
-		quad = defaultQuad(image.naturalWidth, image.naturalHeight);
 		return true;
 	}
 
@@ -92,7 +87,6 @@
 			releaseImage();
 			file = null;
 			img = null;
-			quad = null;
 		}
 	}
 
@@ -107,70 +101,12 @@
 		input.value = ''; // sonst feuert die Auswahl derselben Datei kein change-Event
 	}
 
-	/** Mindestabstand (CSS-Pixel) zwischen zwei Ecken auf dem Bildschirm. Die
-	    Berührungsfläche jeder Ecke ist 44×44 px (Radius 22 px) groß; erst ab
-	    44 px Mittelpunktabstand berühren sich zwei solche Kreise gerade nicht
-	    mehr - mit etwas Sicherheitsabstand sind es hier 48 px. */
-	const MIN_CORNER_SCREEN_GAP = 48;
-
-	function moveCorner(index: number, event: PointerEvent) {
-		if (!img || !quad) return;
-		const box = (event.currentTarget as HTMLElement).parentElement!.getBoundingClientRect();
-		const scaleX = img.naturalWidth / box.width;
-		const scaleY = img.naturalHeight / box.height;
-		const candidate = {
-			x: (event.clientX - box.left) * scaleX,
-			y: (event.clientY - box.top) * scaleY
-		};
-
-		// Nicht näher an eine benachbarte Ecke heranlassen, als es deren
-		// vergrösserte 44×44-Berührungsfläche erlaubt - sonst überlappen sich
-		// beide Flächen und blockieren sich beim nächsten Ziehen gegenseitig.
-		// Die Ecke bleibt in dem Fall einfach an ihrer letzten gültigen Position
-		// stehen, statt in die Nachbarin hineinzulaufen. Nur die beiden echten
-		// Nachbarn im Viereck zählen, nicht die gegenüberliegende Ecke - "benachbarte
-		// Ecken" aus dem Review-Auftrag meint genau diese beiden.
-		const neighbors = [quad[(index + 3) % 4], quad[(index + 1) % 4]];
-		for (const neighbor of neighbors) {
-			const screenDx = (candidate.x - neighbor.x) / scaleX;
-			const screenDy = (candidate.y - neighbor.y) / scaleY;
-			if (Math.hypot(screenDx, screenDy) < MIN_CORNER_SCREEN_GAP) return;
-		}
-
-		const next = [...quad] as Quad;
-		next[index] = candidate;
-		quad = clampQuad(next, img.naturalWidth, img.naturalHeight);
-	}
-
-	function startDrag(index: number, event: PointerEvent) {
-		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
-		draggingIndex = index;
-		moveCorner(index, event);
-	}
-
-	function dragMove(index: number, event: PointerEvent) {
-		if (draggingIndex !== index) return;
-		moveCorner(index, event);
-	}
-
-	function endDrag() {
-		draggingIndex = null;
-	}
-
-	async function upload() {
-		if (!img || !quad) return;
+	/** Der fertige, entzerrte Bon kommt aus BildBearbeiten. */
+	async function upload(blob: Blob) {
+		if (!img) return;
 		busy = true;
 		message = '';
 		try {
-			const box = boundingBox(quad);
-			const canvas = document.createElement('canvas');
-			canvas.width = Math.round(box.width);
-			canvas.height = Math.round(box.height);
-			canvas
-				.getContext('2d')!
-				.drawImage(img, box.x, box.y, box.width, box.height, 0, 0, canvas.width, canvas.height);
-			const blob = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/webp', 0.85));
-			if (!blob) throw new Error('Zuschnitt fehlgeschlagen');
 
 			// Erst in die Outbox (IndexedDB), dann erst versuchen zu senden: das
 			// Foto ist ab hier gesichert, selbst wenn der Flush direkt scheitert
@@ -183,7 +119,6 @@
 			waiting = await pendingCount();
 			file = null;
 			img = null;
-			quad = null;
 
 			if (pending.length > 0) {
 				const [next, ...rest] = pending;
@@ -205,7 +140,6 @@
 		releaseImage();
 		img = null;
 		file = null;
-		quad = null;
 	}
 </script>
 
@@ -299,40 +233,16 @@
 		</div>
 
 	{:else}
-		<div class="relative select-none p-4">
-			<img src={img.src} alt="Aufgenommener Bon" class="w-full rounded-2xl" />
-			{#each quad ?? [] as corner, i}
-				<!-- Die Berührungsfläche (44×44 CSS-px, Apples Mindestmass) ist grösser als der
-				     sichtbare Punkt (32×32 px): das äussere <button> ist transparent und nur zum
-				     Treffen gedacht, der innere <span> zeigt den eigentlichen Ziehpunkt an. -->
-				<button
-					class="absolute flex h-11 w-11 -translate-x-1/2 -translate-y-1/2 touch-none items-center justify-center rounded-full"
-					style="left: {(corner.x / img.naturalWidth) * 100}%; top: {(corner.y / img.naturalHeight) *
-						100}%"
-					onpointerdown={(e) => startDrag(i, e)}
-					onpointermove={(e) => dragMove(i, e)}
-					onpointerup={endDrag}
-					onpointercancel={endDrag}
-					aria-label="Ecke {i + 1} verschieben"
-				>
-					<span class="h-8 w-8 rounded-full border-2 border-white bg-tuerkis/70"></span>
-				</button>
-			{/each}
-		</div>
-		<div class="px-4 pb-4">
-			<button
-				class="flex h-14 w-full items-center justify-center rounded-2xl bg-marine font-semibold text-white disabled:opacity-60"
-				disabled={busy}
-				onclick={upload}
-			>
-				{busy ? 'Lädt hoch …' : 'Hochladen'}
-			</button>
-			<button
-				class="mt-2 h-11 w-full rounded-2xl bg-chip font-medium text-tinte"
-				onclick={cancel}
-			>
-				Neu aufnehmen
-			</button>
+		<!-- Seit 30.09.2026: Rand erkennen, echt entzerren, drehen (bild/BildBearbeiten.svelte).
+		     Vorher schnitten die vier Punkte nur das umschliessende Rechteck aus. -->
+		<div class="p-4">
+			<BildBearbeiten
+				bild={img}
+				hauptText={busy ? 'Lädt hoch …' : 'Passt, hochladen'}
+				beschaeftigt={busy}
+				onfertig={upload}
+				onabbrechen={cancel}
+			/>
 		</div>
 	{/if}
 

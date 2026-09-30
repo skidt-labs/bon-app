@@ -14,7 +14,8 @@ vi.mock('$lib/server/bons/liste', () => ({
 vi.mock('$lib/server/queue/boss', () => ({ enqueueExtraction: vi.fn(async () => {}) }));
 vi.mock('$lib/server/storage/images', () => ({ loescheBilder: vi.fn(async () => {}) }));
 
-import { zielstatusBeimWiederherstellen, inPapierkorbLegen, ausPapierkorbHolen } from './papierkorb';
+import { zielstatusBeimWiederherstellen, inPapierkorbLegen, ausPapierkorbHolen, bonsEndgueltigLoeschen } from './papierkorb';
+import { loescheBilder } from '$lib/server/storage/images';
 
 const fakeDb = {
 	update: () => ({
@@ -106,5 +107,23 @@ describe('ausPapierkorbHolen', () => {
 	it('meldet 403 fuer den Bon eines anderen Mitglieds', async () => {
 		mocks.bon = { id: 'r1', uploadedBy: 'u2', status: 'verworfen', statusVorVerwerfen: 'review' };
 		expect(await ausPapierkorbHolen(fakeDb, ich, 'r1')).toMatchObject({ ok: false, status: 403 });
+	});
+});
+
+describe('bonsEndgueltigLoeschen', () => {
+	// Seit „Bild bearbeiten" (30.09.2026) kann ein Bon zwei Fassungen haben — beide muessen weg.
+	it('loescht auch das Original eines bearbeiteten Bons', async () => {
+		const db = {
+			delete: () => ({
+				where: () => ({
+					returning: async () => [
+						{ imagePath: 'b/neu.webp', thumbPath: 'b/neu.thumb.webp', originalImagePath: 'a/foto.webp', originalThumbPath: 'a/foto.thumb.webp' },
+						{ imagePath: 'c/x.webp', thumbPath: 'c/x.thumb.webp', originalImagePath: null, originalThumbPath: null }
+					]
+				})
+			})
+		} as never;
+		expect(await bonsEndgueltigLoeschen(db, ['r1', 'r2'])).toBe(2);
+		expect(loescheBilder).toHaveBeenCalledWith(['b/neu.webp', 'b/neu.thumb.webp', 'a/foto.webp', 'a/foto.thumb.webp', 'c/x.webp', 'c/x.thumb.webp']);
 	});
 });

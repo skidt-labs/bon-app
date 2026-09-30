@@ -79,3 +79,13 @@ export function filterLink(aktuell: URLSearchParams, aenderung: Record<string, s
 	}
 	return '?' + p.toString();
 }
+
+/**
+ * Versionskennung fuer Bildadressen (`?v=`): der Dateiname ohne Endung. Das Bild wird ein Jahr
+ * zwischengespeichert; seit es sich bearbeiten laesst (bons/bild.ts), muss die Adresse sich
+ * mit dem Bild aendern — sonst zeigte der Browser weiter das alte.
+ */
+export function bildVersion(pfad: string): string {
+	const name = pfad.split('/').pop() ?? pfad;
+	return name.replace(/\.[^.]+$/, '');
+}

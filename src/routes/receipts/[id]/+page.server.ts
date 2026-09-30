@@ -65,7 +65,9 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	return {
 		receipt,
 		items,
-		ocrZeilen: lauf?.ocrZeilen ?? null,
+		// Wartet der Bon aufs Lesen, gehoeren die Zeilen des letzten Laufs womoeglich zu einem
+		// Bild, das es so nicht mehr gibt (Bild bearbeiten, bons/bild.ts) — dann keine Rahmen.
+		ocrZeilen: receipt.status === 'pending' || receipt.status === 'extracting' ? null : (lauf?.ocrZeilen ?? null),
 		kategorien,
 		stapel,
 		original,

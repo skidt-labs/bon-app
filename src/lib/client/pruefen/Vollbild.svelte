@@ -4,12 +4,14 @@
 
 	let {
 		bonId,
+		bildVersion,
 		zeilen,
 		gewaehlt,
 		onwaehlen,
 		onschliessen
 	}: {
 		bonId: string;
+		bildVersion: string;
 		zeilen: OcrZeileKurz[] | null;
 		gewaehlt: number | null;
 		onwaehlen: (index: number) => void;
@@ -38,6 +40,6 @@
 		>
 	</div>
 	<div class="min-h-0 flex-1">
-		<Bonbild {bonId} {zeilen} {gewaehlt} {onwaehlen} />
+		<Bonbild {bonId} {bildVersion} {zeilen} {gewaehlt} {onwaehlen} />
 	</div>
 </div>
