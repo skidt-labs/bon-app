@@ -8,6 +8,26 @@ Eine OCR-Engine liest den Text, ein Sprachmodell macht daraus Händler, Datum, P
 und Beträge, ein Mensch prüft das Ergebnis gegen das Bild. Danach zählt der Bon in den
 Berichten: Ausgaben je Monat, Kategorie und Händler, Budgets („Töpfe"), CSV-Export.
 
+## Was die App kann
+
+- **Scannen:** Foto aus der Kamera oder mehrere auf einmal aus der Galerie. Die App sucht
+  den Rand des Bons selbst, entzerrt ein schräges Foto, dreht in Vierteln und fein. Ohne
+  Netz wartet das Foto in einer Warteschlange im Browser und geht raus, sobald es geht.
+- **Auslesen im Hintergrund:** Eine Vorprüfung lässt Kauderwelsch nicht zum Modell;
+  angeschnittene Fotos kommen trotzdem durch. Ist das Bild gar kein Kassenbon (kaum Text,
+  Text ohne Preise, Kartenbeleg), sagt die App das und bietet Verwerfen oder „Doch ein Bon“ an.
+- **Prüfen:** Bild und Positionen nebeneinander, die gewählte Zeile ist im Bild markiert.
+  Rechenprobe je Zeile, Hinweis auf vermutete Doppel (zweites Foto desselben Einkaufs).
+  Ein fehlgeschlagener Bon lässt sich von Hand eintragen, das Bild nachträglich zuschneiden
+  und neu lesen — das Original bleibt erhalten.
+- **Kategorien:** zuerst aus dem Gelernten, dann vom Sprachmodell (übersprungene Zeilen
+  werden nachgefragt). Jede Korrektur von Hand wird zur Regel für den nächsten Bon.
+- **Papierkorb:** Jeder Bon lässt sich verwerfen und 30 Tage lang wiederherstellen; danach
+  löscht der Worker ihn samt Bildern.
+- **Berichte:** Monat, Jahr oder Zeitraum; Filter nach Laden, Kategorie, Person, Betrag,
+  Topf, Suchbegriff; gespeicherte Berichte; CSV, Druckansicht und eine Zusammenfassung per
+  Matrix.
+
 ## Grundsätze
 
 - **Das Foto bleibt im Haus.** Voreingestellt ist der Textweg: die OCR läuft auf dem
@@ -27,7 +47,7 @@ Berichten: Ausgaben je Monat, Kategorie und Händler, Budgets („Töpfe"), CSV-
 | Dienst | Aufgabe |
 |---|---|
 | `bon-web` | SvelteKit-Oberfläche und API |
-| `bon-worker` | Auslese-Warteschlange (pg-boss): OCR, Sprachmodell, Plausibilitätsprüfung |
+| `bon-worker` | Auslese-Warteschlange (pg-boss): OCR, Sprachmodell, Plausibilitätsprüfung, Kategorien; leert täglich den Papierkorb |
 | `bon-matrix` | Matrix-Bot: nimmt Bonfotos im Direktchat an, koppelt Konten per Code |
 | `bon-paddleocr` | optionale zweite OCR-Engine (Vorgabe ist Tesseract im Worker) |
 | `bon-db` | PostgreSQL |
