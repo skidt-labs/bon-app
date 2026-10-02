@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { zeitlimitAusEnv, STANDARD_ZEITLIMIT_MS, getProvider, baueProvider, konfigAusEnv } from './index';
+import { zeitlimitAusEnv, STANDARD_ZEITLIMIT_MS, getProvider, baueProvider, konfigAusEnv, textZielAus } from './index';
 import type { ExecFileImpl } from '../ocr/lesen';
 import { BildwegNichtFreigegeben } from '$lib/server/ki/fehler';
 
@@ -238,6 +238,36 @@ describe('baueProvider — aus einer ausdruecklichen Konfiguration', () => {
 			EXTRACTION_BILDWEG_BESTAETIGT: 'ja'
 		} as NodeJS.ProcessEnv);
 		expect(p.id).toBe('openai-compat');
+	});
+
+	// Cloud-Reserve: der Worker setzt „Mac, sonst Reserve" als Modellaufruf ein.
+	it('reicht einen uebergebenen Modellaufruf an den Textweg durch', async () => {
+		const modellAufruf = vi.fn(async () => ({
+			receipt: { merchantName: null, merchantAddress: null, purchasedAt: null, totalGrossCents: 378, currency: 'EUR', paymentMethod: null, vatSummary: [], items: [] } as never,
+			usage: null,
+			raw: {},
+			servedModel: null,
+			warnings: []
+		}));
+		const ocrAnbieter = {
+			engine: 'test',
+			lies: async () => ({ status: 'gelesen' as const, text: 'Milch 1,29\nBrot 2,49\nSumme 3,78\n01.01.2026', engine: 'test', version: null, dauerMs: 1, optionen: {} })
+		};
+		const p = baueProvider({ ...k, weg: 'text' }, { ocrAnbieter: ocrAnbieter as never, modellAufruf }, {} as NodeJS.ProcessEnv);
+		await p.extract(Buffer.from('x'));
+		expect(modellAufruf).toHaveBeenCalledTimes(1);
+	});
+});
+
+describe('textZielAus', () => {
+	it('macht aus einer Konfiguration das Ziel des Textwegs', () => {
+		expect(textZielAus({ weg: 'text', baseUrl: 'http://m.invalid/v1', apiKey: 's', model: 'm', timeoutMs: 30_000 })).toEqual({
+			id: 'ocr-text',
+			baseUrl: 'http://m.invalid/v1',
+			apiKey: 's',
+			model: 'm',
+			timeoutMs: 30_000
+		});
 	});
 });
 

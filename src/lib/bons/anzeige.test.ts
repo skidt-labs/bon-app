@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { statusText, quelleText, tagesgruppen, filterLink, formatWann } from './anzeige';
+import { statusText, quelleText, tagesgruppen, filterLink, formatWann, vonReserveGelesen } from './anzeige';
 
 describe('statusText und quelleText', () => {
 	it('uebersetzen jeden Wert und lassen Unbekanntes sichtbar', () => {
@@ -57,5 +57,28 @@ describe('formatWann', () => {
 	it('zeigt Datum und Uhrzeit deutsch in Berliner Zeit, leer fuer null', () => {
 		expect(formatWann(null)).toBe('');
 		expect(formatWann(new Date('2026-09-16T15:42:00Z'))).toMatch(/16\.09\.2026, 17:42/);
+	});
+});
+
+// Cloud-Reserve (Entwurf 2026-10-01): der Vermerk nur bei einem GELESENEN Bon, den die Reserve
+// gelesen hat — ein gescheiterter oder wartender Bon wurde von niemandem gelesen.
+describe('vonReserveGelesen', () => {
+	const lauf = (kiRolle: string | null, error: string | null = null) => ({ kiRolle, error });
+	it('gilt fuer gelesene Bons der Reserve', () => {
+		expect(vonReserveGelesen('review', lauf('reserve'))).toBe(true);
+		expect(vonReserveGelesen('confirmed', lauf('reserve'))).toBe(true);
+	});
+	it('gilt nicht fuer gescheiterte, wartende und vom Mac gelesene Bons', () => {
+		expect(vonReserveGelesen('failed', lauf('reserve'))).toBe(false);
+		expect(vonReserveGelesen('pending', lauf('reserve'))).toBe(false);
+		expect(vonReserveGelesen('review', lauf('haupt'))).toBe(false);
+		expect(vonReserveGelesen('review', lauf(null))).toBe(false);
+		expect(vonReserveGelesen('review', undefined)).toBe(false);
+	});
+	// Abschlusspruefung 02.10.: ein gescheiterter Lauf, danach von Hand eingetragen (review) —
+	// die Zahlen tippte ein Mensch, gelesen hat die Reserve nichts.
+	it('gilt nicht, wenn der juengste Lauf gescheitert ist', () => {
+		expect(vonReserveGelesen('review', lauf('reserve', 'Antwort passt nicht zum Schema'))).toBe(false);
+		expect(vonReserveGelesen('confirmed', lauf('reserve', 'x'))).toBe(false);
 	});
 });

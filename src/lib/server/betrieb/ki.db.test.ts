@@ -204,3 +204,141 @@ describe.skipIf(AUS)('KI-Anbieter gegen die echte Datenbank', () => {
 		});
 	});
 });
+
+/**
+ * Cloud-Reserve (Entwurf 2026-10-01). JEDER Fall in einer zurueckgerollten Transaktion — anders
+ * als die Faelle oben, die aufraeumen: der laufende Worker liest instanz.reserve_* bei jedem Bon,
+ * und eine Test-Reserve, die auch nur kurz sichtbar waere, koennte einen echten Bon umleiten.
+ */
+const ROLLBACK = new Error('rollback');
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+
+describe.skipIf(AUS)('Cloud-Reserve auf der Betriebsseite gegen die echte Datenbank', () => {
+	const MIT_ENV = { ...env, EXTRACTION_PROVIDER: 'ocr-text', EXTRACTION_BASE_URL: 'http://mac.invalid/v1', EXTRACTION_API_KEY: 'k', EXTRACTION_MODEL: 'm' } as NodeJS.ProcessEnv;
+
+	async function zurueckgerollt(f: (tx: Tx) => Promise<void>) {
+		await expect(
+			db.transaction(async (tx) => {
+				// Ausgangslage in der Transaktion: kein aktiver Anbieter (die .env gilt), keine Reserve.
+				const leer = { aktiverKiAnbieter: null, reserveKiAnbieter: null, reserveAktivSeit: null, reserveGrenzeGemeldet: null };
+				await tx.insert(instanz).values({ id: 1, ...leer }).onConflictDoUpdate({ target: instanz.id, set: leer });
+				await f(tx);
+				throw ROLLBACK;
+			})
+		).rejects.toBe(ROLLBACK);
+	}
+
+	async function karte(tx: Tx, teil: Partial<typeof kiAnbieter.$inferInsert> = {}): Promise<string> {
+		const [k] = await tx
+			.insert(kiAnbieter)
+			.values({ name: 'db-test-reserve', weg: 'text', baseUrl: 'http://reserve.invalid/v1', modell: 'flash', zeitlimitMs: 60_000, testOk: true, preisEinMicro: 300_000, preisAusMicro: 2_500_000, ...teil })
+			.returning({ id: kiAnbieter.id });
+		return k.id;
+	}
+
+	const stand = async (tx: Tx) => (await tx.select().from(instanz).where(eq(instanz.id, 1)))[0];
+	const fehler = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+
+	it('verweigert das Festlegen bei Bildweg, ohne Test, ohne Preise und fuer die aktive Karte', async () => {
+		await zurueckgerollt(async (tx) => {
+			for (const teil of [{ weg: 'bild' as const }, { testOk: false }, { testOk: null }, { preisAusMicro: null }]) {
+				const id = await karte(tx, teil);
+				expect(await fehler(ki.reserveFestlegen(id, null as never, MIT_ENV, tx as never))).toBeInstanceOf(ki.ReserveNichtMoeglich);
+			}
+			const aktiv = await karte(tx);
+			await tx.update(instanz).set({ aktiverKiAnbieter: aktiv }).where(eq(instanz.id, 1));
+			const f = await fehler(ki.reserveFestlegen(aktiv, null as never, MIT_ENV, tx as never));
+			expect((f as ki.ReserveNichtMoeglich).grund).toBe('Das ist der aktive Hauptanbieter.');
+			expect((await stand(tx)).reserveKiAnbieter).toBeNull();
+		});
+	});
+
+	it('legt fest: Reserve gesetzt, ki_stand +1, Protokoll; loeschen ist dann gesperrt', async () => {
+		await zurueckgerollt(async (tx) => {
+			const id = await karte(tx);
+			const vorher = (await stand(tx)).kiStand;
+			await ki.reserveFestlegen(id, null as never, MIT_ENV, tx as never);
+			const nachher = await stand(tx);
+			expect(nachher.reserveKiAnbieter).toBe(id);
+			expect(nachher.kiStand).toBe(vorher + 1);
+			const [p] = await tx.select().from(betriebsprotokoll).where(and(eq(betriebsprotokoll.aktion, 'ki.reserve_gesetzt'), sql`${betriebsprotokoll.details}->>'neu' = ${id}`));
+			expect(p).toBeDefined();
+			expect(await fehler(ki.anbieterLoeschen(id, null as never, tx as never))).toBeInstanceOf(ki.AnbieterIstReserve);
+		});
+	});
+
+	// Nicht im Plan, beim Bau gefunden: die Reserve-Karte zum Hauptanbieter zu machen, liesse
+	// sie Haupt UND Reserve zugleich sein — jeder Bon ginge in die Cloud.
+	it('verweigert das Aktivieren der Reserve-Karte', async () => {
+		await zurueckgerollt(async (tx) => {
+			const id = await karte(tx);
+			await ki.reserveFestlegen(id, null as never, MIT_ENV, tx as never);
+			expect(await fehler(ki.anbieterAktivieren(id, null as never, MIT_ENV, tx as never))).toBeInstanceOf(ki.AnbieterIstReserve);
+			expect((await stand(tx)).aktiverKiAnbieter).toBeNull();
+		});
+	});
+
+	it('entfernt die Reserve auch, waehrend sie liest', async () => {
+		await zurueckgerollt(async (tx) => {
+			const id = await karte(tx);
+			await ki.reserveFestlegen(id, null as never, MIT_ENV, tx as never);
+			await tx.update(instanz).set({ reserveAktivSeit: new Date() }).where(eq(instanz.id, 1));
+			await ki.reserveEntfernen(null as never, tx as never);
+			const s = await stand(tx);
+			expect(s.reserveKiAnbieter).toBeNull();
+			expect(s.reserveAktivSeit).toBeNull();
+		});
+	});
+
+	it('eine neue Grenze leert den gemeldeten Monat', async () => {
+		await zurueckgerollt(async (tx) => {
+			await tx.update(instanz).set({ reserveGrenzeGemeldet: '2031-10' }).where(eq(instanz.id, 1));
+			await ki.reserveGrenzeSpeichern(12_000_000, null as never, tx as never);
+			const s = await stand(tx);
+			expect(s.reserveGrenzeMicro).toBe(12_000_000);
+			expect(s.reserveGrenzeGemeldet).toBeNull();
+		});
+	});
+
+	it('Bearbeiten der Reserve-Karte erhoeht ki_stand, damit der Worker den neuen Schluessel nimmt', async () => {
+		await zurueckgerollt(async (tx) => {
+			const id = await karte(tx);
+			await ki.reserveFestlegen(id, null as never, MIT_ENV, tx as never);
+			const vorher = (await stand(tx)).kiStand;
+			await ki.anbieterAendern(id, { ...basis, name: 'db-test-reserve', modell: 'flash-2', preisEinMicro: 300_000, preisAusMicro: 2_500_000 }, null as never, MIT_ENV, tx as never);
+			expect((await stand(tx)).kiStand).toBe(vorher + 1);
+		});
+	});
+
+	// Abschlusspruefung 02.10.: die Seite muss sagen, was der Worker tut — eine nachtraeglich auf
+	// Bildweg gestellte oder preislose Reserve-Karte wirkt nicht.
+	it('reserveStand: eine Reserve-Karte ohne Preise oder mit Bildweg ist wirkungslos, mit Grund', async () => {
+		await zurueckgerollt(async (tx) => {
+			const jetzt = new Date('2031-10-15T12:00:00Z');
+			const id = await karte(tx);
+			await ki.reserveFestlegen(id, null as never, MIT_ENV, tx as never);
+			await tx.update(kiAnbieter).set({ preisAusMicro: null }).where(eq(kiAnbieter.id, id));
+			expect(await ki.reserveStand(MIT_ENV, jetzt, tx as never)).toMatchObject({
+				zustand: 'wirkungslos',
+				grund: 'Preise fehlen — ohne sie lässt sich die Monatsgrenze nicht prüfen.'
+			});
+			await tx.update(kiAnbieter).set({ preisAusMicro: 2_500_000, weg: 'bild' }).where(eq(kiAnbieter.id, id));
+			expect(await ki.reserveStand(MIT_ENV, jetzt, tx as never)).toMatchObject({ zustand: 'wirkungslos', grund: 'Die Reserve-Karte nutzt den Bildweg.' });
+		});
+	});
+
+	it('reserveStand: keine, bereit, aktiv mit Grund aus dem Protokoll', async () => {
+		await zurueckgerollt(async (tx) => {
+			const jetzt = new Date('2031-10-15T12:00:00Z');
+			expect((await ki.reserveStand(MIT_ENV, jetzt, tx as never)).zustand).toBe('keine');
+			const id = await karte(tx);
+			await ki.reserveFestlegen(id, null as never, MIT_ENV, tx as never);
+			expect(await ki.reserveStand(MIT_ENV, jetzt, tx as never)).toMatchObject({ zustand: 'bereit', name: 'db-test-reserve', modell: 'flash' });
+			await tx.update(instanz).set({ reserveAktivSeit: new Date() }).where(eq(instanz.id, 1));
+			await tx.insert(betriebsprotokoll).values({ userId: null, aktion: 'ki.reserve_aktiv', ziel: 'Reserve', details: { grund: 'Zeitüberschreitung' }, zeit: new Date('2031-10-15T11:59:00Z') });
+			expect(await ki.reserveStand(MIT_ENV, jetzt, tx as never)).toMatchObject({ zustand: 'aktiv', grund: 'Zeitüberschreitung' });
+			await tx.update(instanz).set({ reserveGrenzeMicro: 0 }).where(eq(instanz.id, 1));
+			expect((await ki.reserveStand(MIT_ENV, jetzt, tx as never)).zustand).toBe('grenze');
+		});
+	});
+});

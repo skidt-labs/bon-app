@@ -1,5 +1,6 @@
 import { KATEGORIEBAUM, SONSTIGES_UNSORTIERT_SLUG } from './baum';
-import { stripCodeFence } from '$lib/server/extraction/openai-compat';
+import { stripCodeFence, parseUsage } from '$lib/server/extraction/openai-compat';
+import type { TextModellZiel } from '$lib/server/extraction/ocr-text-provider';
 import type { ExtractionUsage } from '$lib/server/extraction/types';
 import type { ZuOrdnendeZeile } from './kaskade';
 
@@ -178,22 +179,26 @@ export async function ordneMitNachfrage(zeilen: ZuOrdnendeZeile[], deps: ModellD
 }
 
 /**
- * Der echte Modellaufruf — an DIESELBE Adresse, an die schon die Auslesung geht
- * (EXTRACTION_BASE_URL). Das ist der MLX-Server auf eigener Hardware; Bontext verlaesst
- * den eigenen Bereich nicht, und es gibt hier bewusst keinen zweiten, getrennt
- * konfigurierbaren Weg, ueber den er es doch koennte.
+ * Der echte Modellaufruf — an das Modell, das den Bon GERADE GELESEN hat (`ziel`): im Normalfall
+ * der MLX-Server auf eigener Hardware, bei einem Ausfall die Cloud-Reserve. Dann geht auch der
+ * Kategorie-Text in die Cloud — nur Text, nie das Bild, und nur, wenn eine Reserve eingerichtet
+ * ist und gelesen hat (Entwurf 2026-10-01-cloud-reserve; der Bon traegt dann einen Vermerk).
+ * Ohne `ziel` gilt die .env wie bisher (EXTRACTION_BASE_URL).
  *
  * Erst beim Aufruf gelesen, nicht beim Import: sonst braeuchte jeder Test, der dieses
  * Modul anfasst, die Umgebungsvariablen.
  */
-export function echteModellDeps(opts: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}): ModellDeps {
-	const doFetch = opts.fetchImpl ?? fetch;
+export function echteModellDeps(
+	opts: { ziel?: TextModellZiel | null; fetchImpl?: typeof fetch; timeoutMs?: number } = {}
+): ModellDeps {
+	const doFetch = opts.fetchImpl ?? opts.ziel?.fetchImpl ?? fetch;
 	return {
 		async frageModell(inhalt) {
-			const baseUrl = process.env.EXTRACTION_BASE_URL;
-			const apiKey = process.env.EXTRACTION_API_KEY;
-			const model = process.env.EXTRACTION_MODEL;
-			if (!baseUrl || !apiKey || !model) throw new Error('Modellzugang ist nicht konfiguriert.');
+			const baseUrl = opts.ziel?.baseUrl ?? process.env.EXTRACTION_BASE_URL;
+			const apiKey = opts.ziel ? opts.ziel.apiKey : process.env.EXTRACTION_API_KEY;
+			const model = opts.ziel?.model ?? process.env.EXTRACTION_MODEL;
+			// Ein Ziel darf ohne Schluessel sein (MLX ohne Schutz); die .env wie bisher nicht.
+			if (!baseUrl || !model || (opts.ziel ? apiKey === undefined : !apiKey)) throw new Error('Modellzugang ist nicht konfiguriert.');
 
 			const antwort = await doFetch(`${baseUrl}/chat/completions`, {
 				method: 'POST',
@@ -218,19 +223,14 @@ export function echteModellDeps(opts: { fetchImpl?: typeof fetch; timeoutMs?: nu
 			}
 			const json = (await antwort.json()) as {
 				choices?: { message?: { content?: unknown } }[];
-				usage?: { prompt_tokens?: number; completion_tokens?: number };
+				usage?: unknown;
 			};
 			const text = json.choices?.[0]?.message?.content;
 			if (typeof text !== 'string') throw new Error('Modellantwort ohne Inhalt');
-			return {
-				text,
-				usage: json.usage
-					? {
-							inputTokens: json.usage.prompt_tokens ?? 0,
-							outputTokens: json.usage.completion_tokens ?? 0
-						}
-					: null
-			};
+			// parseUsage kennt beide Schreibweisen (Abacus: input_tokens, Mac: prompt_tokens) und
+			// sagt null statt einer erfundenen 0 — sonst saehe die Reserve kostenlos aus und die
+			// Monatsgrenze zaehlte zu wenig.
+			return { text, usage: parseUsage(json.usage) };
 		}
 	};
 }

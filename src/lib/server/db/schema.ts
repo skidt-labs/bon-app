@@ -122,6 +122,17 @@ export const instanz = pgTable('instanz', {
 	}),
 	/** Steigt bei jeder Aenderung am aktiven Anbieter; daran erkennt der Worker, dass er neu laden muss. */
 	kiStand: integer('ki_stand').notNull().default(0),
+	/**
+	 * Die Cloud-Reserve (Entwurf 2026-10-01-cloud-reserve). null = keine Reserve. `restrict`:
+	 * wie beim aktiven Anbieter laesst sich die Reserve nicht loeschen, solange sie es ist.
+	 */
+	reserveKiAnbieter: uuid('reserve_ki_anbieter').references(() => kiAnbieter.id, { onDelete: 'restrict' }),
+	/** null = der Hauptanbieter liest. Ein Zeitpunkt: seitdem liest die Reserve (ueberdauert Neustarts). */
+	reserveAktivSeit: timestamp('reserve_aktiv_seit', { withTimezone: true }),
+	/** Monatsgrenze der Reserve in Millionstel Euro; Vorgabe 5 €. */
+	reserveGrenzeMicro: integer('reserve_grenze_micro').notNull().default(5_000_000),
+	/** 'YYYY-MM' des Monats, fuer den „Grenze erreicht" schon gemeldet wurde — damit nur einmal. */
+	reserveGrenzeGemeldet: text('reserve_grenze_gemeldet'),
 	geaendertAm: timestamp('geaendert_am', { withTimezone: true }).notNull().defaultNow()
 });
 
@@ -460,6 +471,14 @@ export const extractionRuns = pgTable('extraction_runs', {
 	// Kosten des Aufrufs in Millionstel Euro. NICHT in Cent: ein Extraktionsaufruf
 	// kostet rund 0,2 Cent und würde auf 0 gerundet. 0,00225 EUR = 2250.
 	costMicroEuros: integer('cost_micro_euros'),
+	// Wer gelesen hat: der Hauptanbieter oder die Cloud-Reserve (Entwurf 2026-10-01). null bei
+	// Laeufen vor Migration 0034. Grundlage des Vermerks am Bon und der Monatsgrenze.
+	kiRolle: text('ki_rolle').$type<'haupt' | 'reserve'>(),
+	// Was der Kategorien-Aufruf nach dem Lesen verbrauchte. null = kein Modellaufruf (alles aus
+	// dem Gedaechtnis) oder unbekannt — nie 0.
+	kategorienInputTokens: integer('kategorien_input_tokens'),
+	kategorienOutputTokens: integer('kategorien_output_tokens'),
+	kategorienKostenMicro: integer('kategorien_kosten_micro'),
 	// Anteil der Positionen, die nach der Bestätigung durch einen Menschen exakt
 	// stimmten (Preis und Zeilentyp), 0-100. Null, solange nicht ausgewertet.
 	accuracyVsConfirmed: integer('accuracy_vs_confirmed'),

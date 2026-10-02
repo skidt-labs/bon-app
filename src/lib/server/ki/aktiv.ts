@@ -5,9 +5,13 @@ import {
 	baueProvider,
 	bildwegIstBestaetigt,
 	konfigAusEnv,
+	textZielAus,
 	type KiWeg,
 	type ProviderKonfig
 } from '$lib/server/extraction';
+import type { TextModellZiel } from '$lib/server/extraction/ocr-text-provider';
+import { modellAufrufMitReserve, type Leser, type UmschaltDeps } from './umschalten';
+import { echteUmschaltDeps } from './reserve';
 import type { ExtractionProvider } from '$lib/server/extraction/types';
 import { entschluesseln } from './geheimnis';
 import { BildwegNichtFreigegeben, KiKonfigurationFehler, KiSchluesselUnlesbar } from './fehler';
@@ -44,14 +48,27 @@ export type AktiverProvider = {
 	name: string;
 	quelle: 'oberflaeche' | 'env';
 	preise: Preise;
+	/** Die Konfiguration des Hauptanbieters — fuer den Zeitplan-Auftrag, der ihn anfragt. */
+	konfig: ProviderKonfig;
+	/** Die Cloud-Reserve, wenn eine eingerichtet ist UND wirken kann (beide Textweg). */
+	reserve: { kiAnbieterId: string; name: string } | null;
+	/** Wer den letzten Bon gelesen hat (Hauptanbieter oder Reserve); vor dem ersten: der Hauptanbieter. */
+	letzterLeser(): Leser;
+	/**
+	 * Ein neuer Auftrag beginnt: zurueck auf den Hauptanbieter. Sonst erbte ein Bon, der VOR dem
+	 * Modellaufruf scheitert, die Rolle des vorigen (Abschlusspruefung 02.10.2026).
+	 */
+	neuerAuftrag(): void;
 };
 
 export type AufloeserDeps = {
-	leseStand(): Promise<{ stand: number; aktivId: string | null }>;
+	leseStand(): Promise<{ stand: number; aktivId: string | null; reserveId?: string | null }>;
 	leseAnbieter(id: string): Promise<KiAnbieterRoh | null>;
 	bauen?: typeof baueProvider;
 	env?: NodeJS.ProcessEnv;
 	log?: (zeile: string) => void;
+	/** Was „umschalten" im Betrieb bedeutet (Zustand, Matrix, Protokoll). Fehlt es: keine Reserve. */
+	umschalten?: (reserve: { kiAnbieterId: string; name: string }) => UmschaltDeps;
 };
 
 /** Zeile → Konfiguration. Entschluesselt; wirft KiSchluesselUnlesbar statt irgendetwas anderem. */
@@ -99,11 +116,10 @@ export function erzeugeAufloeser(deps: AufloeserDeps): () => Promise<AktiverProv
 	let gemerkt: { schluessel: string; wert: AktiverProvider } | null = null;
 
 	return async () => {
-		const { stand, aktivId } = await deps.leseStand();
-		const schluessel = `${stand}:${aktivId ?? 'env'}`;
+		const { stand, aktivId, reserveId = null } = await deps.leseStand();
+		const schluessel = `${stand}:${aktivId ?? 'env'}:${reserveId ?? '-'}`;
 
 		if (!gemerkt || gemerkt.schluessel !== schluessel) {
-			let wert: AktiverProvider;
 			const pruefe = <T>(f: () => T): T => {
 				try {
 					return f();
@@ -111,28 +127,74 @@ export function erzeugeAufloeser(deps: AufloeserDeps): () => Promise<AktiverProv
 					throw alsKonfigurationFehler(err);
 				}
 			};
+			let k: ProviderKonfig;
+			let kopf: Pick<AktiverProvider, 'kiAnbieterId' | 'name' | 'quelle' | 'preise'>;
 			if (aktivId === null) {
-				const k = pruefe(() => konfigAusEnv(env));
-				wert = {
-					provider: pruefe(() => bauen(k, undefined, env)),
-					weg: k.weg,
-					kiAnbieterId: null,
-					name: '.env',
-					quelle: 'env',
-					preise: preiseAusEnv(env)
-				};
+				k = pruefe(() => konfigAusEnv(env));
+				kopf = { kiAnbieterId: null, name: '.env', quelle: 'env', preise: preiseAusEnv(env) };
 			} else {
 				const z = await deps.leseAnbieter(aktivId);
 				if (!z) throw new KiKonfigurationFehler(`Der aktive KI-Anbieter ${aktivId} fehlt in der Datenbank.`);
-				wert = {
-					provider: pruefe(() => bauen(konfigAusZeile(z, env), undefined, env)),
-					weg: z.weg,
-					kiAnbieterId: z.id,
-					name: z.name,
-					quelle: 'oberflaeche',
-					preise: { einMicro: z.preisEinMicro, ausMicro: z.preisAusMicro }
-				};
+				k = pruefe(() => konfigAusZeile(z, env));
+				kopf = { kiAnbieterId: z.id, name: z.name, quelle: 'oberflaeche', preise: { einMicro: z.preisEinMicro, ausMicro: z.preisAusMicro } };
 			}
+			const haupt: Leser = {
+				rolle: 'haupt',
+				name: kopf.name,
+				modell: k.model,
+				kiAnbieterId: kopf.kiAnbieterId,
+				preise: kopf.preise,
+				ziel: () => textZielAus(k)
+			};
+			// Wer zuletzt gelesen hat — je gebautem Anbieter; der Worker arbeitet einen Auftrag nach
+			// dem anderen ab (batchSize 1), also stimmt der Wert nach jedem extract.
+			let zuletzt: Leser = haupt;
+			let reserve: AktiverProvider['reserve'] = null;
+			let overrides: Parameters<typeof baueProvider>[1];
+			if (reserveId && deps.umschalten) {
+				const r = k.weg === 'text' ? await deps.leseAnbieter(reserveId) : null;
+				// Ohne Preise zaehlten ihre Laeufe 0 € — die Monatsgrenze griffe nie (Abschlusspruefung 02.10.).
+				const mitPreisen = r !== null && r.preisEinMicro !== null && r.preisAusMicro !== null;
+				if (r && r.weg === 'text' && mitPreisen) {
+					const reserveLeser: Leser = {
+						rolle: 'reserve',
+						name: r.name,
+						modell: r.modell,
+						kiAnbieterId: r.id,
+						preise: { einMicro: r.preisEinMicro, ausMicro: r.preisAusMicro },
+						// Faul: ein unlesbarer Reserve-Schluessel wirft erst, wenn die Reserve gefragt
+						// wird — er haelt den Mac nicht auf.
+						ziel: () => textZielAus(konfigAusZeile(r, env))
+					};
+					overrides = {
+						modellAufruf: modellAufrufMitReserve(haupt, reserveLeser, deps.umschalten({ kiAnbieterId: r.id, name: r.name }), (l) => {
+							zuletzt = l;
+						})
+					};
+					reserve = { kiAnbieterId: r.id, name: r.name };
+				} else {
+					const warum =
+						k.weg !== 'text'
+							? 'der Hauptanbieter nutzt den Bildweg'
+							: !r
+								? 'die Reserve-Karte fehlt'
+								: r.weg !== 'text'
+									? 'die Reserve-Karte nutzt den Bildweg'
+									: 'an der Reserve-Karte fehlen die Preise, die Monatsgrenze liesse sich nicht pruefen';
+					log(`[worker] Reserve wirkungslos: ${warum}`);
+				}
+			}
+			const wert: AktiverProvider = {
+				provider: pruefe(() => bauen(k, overrides, env)),
+				weg: k.weg,
+				...kopf,
+				konfig: k,
+				reserve,
+				letzterLeser: () => zuletzt,
+				neuerAuftrag: () => {
+					zuletzt = haupt;
+				}
+			};
 			if (gemerkt) log(`[worker] KI gewechselt auf ${wert.name}/${wert.provider.model} (aus ${wert.quelle === 'env' ? '.env' : 'Oberflaeche'})`);
 			gemerkt = { schluessel, wert };
 		}
@@ -151,11 +213,12 @@ export function erzeugeAufloeser(deps: AufloeserDeps): () => Promise<AktiverProv
 export const aktuellerProvider = erzeugeAufloeser({
 	async leseStand() {
 		const [z] = await db
-			.select({ stand: instanz.kiStand, aktivId: instanz.aktiverKiAnbieter })
+			.select({ stand: instanz.kiStand, aktivId: instanz.aktiverKiAnbieter, reserveId: instanz.reserveKiAnbieter })
 			.from(instanz)
 			.where(eq(instanz.id, 1));
-		return { stand: z?.stand ?? 0, aktivId: z?.aktivId ?? null };
+		return { stand: z?.stand ?? 0, aktivId: z?.aktivId ?? null, reserveId: z?.reserveId ?? null };
 	},
+	umschalten: (r) => echteUmschaltDeps(r),
 	async leseAnbieter(id) {
 		const [z] = await db
 			.select({
@@ -178,6 +241,11 @@ export const aktuellerProvider = erzeugeAufloeser({
 export type WechselnderProvider = ExtractionProvider & {
 	readonly kiAnbieterId: string | null;
 	readonly preise: Preise;
+	readonly kiRolle: 'haupt' | 'reserve';
+	/** Wohin der Kategorien-Aufruf geht: an das Modell, das den Bon gelesen hat. */
+	readonly kategorienZiel: TextModellZiel;
+	/** Zu Beginn jedes Auftrags (handleExtractJobs): die Rolle steht wieder auf dem Hauptanbieter. */
+	neuerAuftrag(): void;
 };
 
 /**
@@ -199,16 +267,27 @@ export function wechselnderProvider(
 			return aktuell.provider.id;
 		},
 		get model() {
-			return aktuell.provider.model;
+			return aktuell.letzterLeser().modell;
 		},
 		get kiAnbieterId() {
-			return aktuell.kiAnbieterId;
+			return aktuell.letzterLeser().kiAnbieterId;
 		},
 		get preise() {
-			return aktuell.preise;
+			return aktuell.letzterLeser().preise;
+		},
+		get kiRolle() {
+			return aktuell.letzterLeser().rolle;
+		},
+		get kategorienZiel() {
+			return aktuell.letzterLeser().ziel();
+		},
+		neuerAuftrag() {
+			aktuell.neuerAuftrag();
 		},
 		async extract(image, signal, opts) {
+			aktuell.neuerAuftrag();
 			aktuell = await aufloesen();
+			aktuell.neuerAuftrag();
 			return aktuell.provider.extract(image, signal, opts);
 		}
 	};

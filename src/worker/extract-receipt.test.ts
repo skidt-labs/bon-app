@@ -291,6 +291,14 @@ describe('istVoruebergehenderFehler', () => {
     expect(istVoruebergehenderFehler(new ExtractionHttpError(429, 'HTTP 429'))).toBe(true);
   });
 
+  // Abschlusspruefung Cloud-Reserve 02.10.: hinter dem HTTPS-Vorbau meldet ein toter MLX-Prozess
+  // 502/504 — „spaeter nochmal", nicht „Bon kaputt"; dieselbe Liste wie beim Umschalten.
+  it('erkennt Gateway-Fehler 502 und 504 als vorübergehend', () => {
+    expect(istVoruebergehenderFehler(new ExtractionHttpError(502, 'HTTP 502'))).toBe(true);
+    expect(istVoruebergehenderFehler(new ExtractionHttpError(504, 'HTTP 504'))).toBe(true);
+    expect(istVoruebergehenderFehler(new ExtractionHttpError(500, 'HTTP 500'))).toBe(false);
+  });
+
   it('behandelt jeden anderen HTTP-Status als dauerhaft', () => {
     expect(istVoruebergehenderFehler(new ExtractionHttpError(400, 'HTTP 400'))).toBe(false);
     expect(istVoruebergehenderFehler(new ExtractionHttpError(500, 'HTTP 500'))).toBe(false);
@@ -835,5 +843,22 @@ describe('kostenAusTokens mit uebergebenen Preisen', () => {
   });
   it('nimmt eine ausdrueckliche 0 als Preis', () => {
     expect(kostenAusTokens({ inputTokens: 5, outputTokens: 5 }, { einMicro: 0, ausMicro: 0 })).toBe(0);
+  });
+});
+
+// Abschlusspruefung Cloud-Reserve 02.10.: scheitert ein Bon VOR dem Modellaufruf (Bild nicht
+// ladbar, Vorpruefung), darf sein Fehlschlag-Lauf nicht die Rolle des vorigen Bons erben.
+describe('handleExtractJobs — jeder Auftrag beginnt beim Hauptanbieter', () => {
+  it('ruft auftragBeginnt vor jedem Auftrag, noch vor dem Laden des Bildes', async () => {
+    const reihenfolge: string[] = [];
+    const d = deps({
+      auftragBeginnt: vi.fn(() => void reihenfolge.push('beginnt')),
+      loadImage: vi.fn(async (id: string) => {
+        reihenfolge.push(`laden ${id}`);
+        return Buffer.from('bild');
+      })
+    });
+    await handleExtractJobs([job('r1'), job('r2')] as never, d as never);
+    expect(reihenfolge).toEqual(['beginnt', 'laden r1', 'beginnt', 'laden r2']);
   });
 });

@@ -1,7 +1,10 @@
-import { getBoss, QUEUE_EXTRACT, QUEUE_PAPIERKORB, type ExtractJob } from '$lib/server/queue/boss';
+import { getBoss, QUEUE_EXTRACT, QUEUE_PAPIERKORB, QUEUE_KI_PRUEFEN, type ExtractJob } from '$lib/server/queue/boss';
 import { db } from '$lib/server/db';
 import { papierkorbLeeren } from '$lib/server/bons/papierkorb';
 import { aktuellerProvider, wechselnderProvider } from '$lib/server/ki/aktiv';
+import { hauptErreichbar, hauptPruefen } from '$lib/server/ki/umschalten';
+import { echteUmschaltDeps, leseReserveZustand } from '$lib/server/ki/reserve';
+import { textZielAus } from '$lib/server/extraction';
 import { handleExtractJobs, productionDeps, assertBatchSizeOne, istVoruebergehenderFehler } from './extract-receipt';
 import { notifyMatrix } from '$lib/server/notify';
 import { ocrKonfigurationAusEnv } from '$lib/server/ocr/konfiguration';
@@ -67,6 +70,26 @@ await boss.work(QUEUE_PAPIERKORB, async () => {
   if (n > 0) console.log(`[worker] Papierkorb: ${n} Bon(s) nach 30 Tagen endgültig gelöscht`);
 });
 
+// Cloud-Reserve (Entwurf 2026-10-01): solange die Reserve liest, alle 5 Minuten den Mac anfragen
+// und zurueckschalten, sobald er antwortet. Ohne aktive Reserve tut der Auftrag nichts. Ein
+// Fehler hier darf nichts mitreissen — er wird geloggt, beim naechsten Takt geht es weiter.
+await boss.schedule(QUEUE_KI_PRUEFEN, '*/5 * * * *', null, { tz: 'Europe/Berlin' });
+await boss.work(QUEUE_KI_PRUEFEN, async () => {
+  try {
+    const a = await aktuellerProvider();
+    const reserve = a.reserve;
+    if (!reserve) return;
+    const ergebnis = await hauptPruefen({
+      reserveAktivSeit: async () => (await leseReserveZustand()).aktivSeit,
+      probe: () => hauptErreichbar(textZielAus(a.konfig)),
+      zurueckschalten: (anlass) => echteUmschaltDeps(reserve).zurueckschalten(anlass)
+    });
+    if (ergebnis === 'weiter') console.log('[worker] Mac weiter nicht erreichbar, die Reserve liest');
+  } catch (err) {
+    console.error('[worker] Pruefung des Hauptanbieters fehlgeschlagen', err instanceof Error ? err.message : String(err));
+  }
+});
+
 // Die OCR-Engine steht bewusst MIT in dieser Zeile. Bis zum 2026-09-16 meldete der
 // Worker nur den Extraktions-Anbieter — nach dem Umstellen auf PaddleOCR liess sich der
 // laufenden Anlage also nicht ansehen, WELCHE Engine sie benutzt. Eine Einstellung, die
@@ -76,7 +99,8 @@ await boss.work(QUEUE_PAPIERKORB, async () => {
 const ocrHinweis =
   start.weg === 'text' ? `, OCR ${ocrKonfigurationAusEnv().engine}` : ', ohne OCR';
 const quelle = start.quelle === 'env' ? 'aus .env' : `aus Oberflaeche („${start.name}")`;
-console.log(`[worker] bereit, Provider ${provider.id}/${provider.model}${ocrHinweis}, ${quelle}`);
+const reserveHinweis = start.reserve ? `, Reserve „${start.reserve.name}"` : ', ohne Reserve';
+console.log(`[worker] bereit, Provider ${provider.id}/${provider.model}${ocrHinweis}, ${quelle}${reserveHinweis}`);
 
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ordneMitModell, ordneMitNachfrage, auswahlliste } from './modell';
+import { ordneMitModell, ordneMitNachfrage, auswahlliste, echteModellDeps } from './modell';
 import type { ZuOrdnendeZeile } from './kaskade';
 
 const zeilen: ZuOrdnendeZeile[] = [
@@ -156,5 +156,57 @@ describe('ordneMitNachfrage', () => {
 		const r = await ordneMitNachfrage(drei, { frageModell: frag });
 		expect(r.vorschlaege).toEqual({ i1: 'lebensmittel-milch-eier' });
 		expect(r.fehler).toContain('Nachfrage');
+	});
+});
+
+// Cloud-Reserve (Entwurf 2026-10-01): die Kategorien fragen das Modell, das den Bon gelesen
+// hat — und lesen den Verbrauch in beiden Schreibweisen (der Abacus-Proxy meldet
+// input_tokens/output_tokens; eine stille 0 hielte die Reserve fuer kostenlos).
+describe('echteModellDeps', () => {
+	const antwort = (usage: unknown) =>
+		vi.fn<typeof fetch>(async () =>
+			new Response(JSON.stringify({ choices: [{ message: { content: '{"zuordnung":[]}' } }], ...(usage === undefined ? {} : { usage }) }), {
+				status: 200,
+				headers: { 'content-type': 'application/json' }
+			})
+		);
+
+	it('fragt das uebergebene Ziel statt der .env', async () => {
+		vi.stubEnv('EXTRACTION_BASE_URL', 'http://env.invalid/v1');
+		vi.stubEnv('EXTRACTION_API_KEY', 'env-key');
+		vi.stubEnv('EXTRACTION_MODEL', 'env-modell');
+		const fetchImpl = antwort({ prompt_tokens: 1, completion_tokens: 1 });
+		await echteModellDeps({ ziel: { id: 'r', baseUrl: 'http://reserve.invalid/v1', apiKey: 'r-key', model: 'flash' }, fetchImpl }).frageModell('x');
+		const [url, init] = fetchImpl.mock.calls[0];
+		expect(url).toBe('http://reserve.invalid/v1/chat/completions');
+		expect((init?.headers as Record<string, string>).authorization).toBe('Bearer r-key');
+		expect(JSON.parse(String(init?.body)).model).toBe('flash');
+		vi.unstubAllEnvs();
+	});
+
+	it('nimmt ohne Ziel weiter die .env', async () => {
+		vi.stubEnv('EXTRACTION_BASE_URL', 'http://env.invalid/v1');
+		vi.stubEnv('EXTRACTION_API_KEY', 'env-key');
+		vi.stubEnv('EXTRACTION_MODEL', 'env-modell');
+		const fetchImpl = antwort({ prompt_tokens: 1, completion_tokens: 1 });
+		await echteModellDeps({ fetchImpl }).frageModell('x');
+		expect(fetchImpl.mock.calls[0][0]).toBe('http://env.invalid/v1/chat/completions');
+		vi.unstubAllEnvs();
+	});
+
+	it('liest input_tokens/output_tokens', async () => {
+		const r = await echteModellDeps({
+			ziel: { id: 'r', baseUrl: 'http://r.invalid/v1', apiKey: 'k', model: 'm' },
+			fetchImpl: antwort({ input_tokens: 120, output_tokens: 30 })
+		}).frageModell('x');
+		expect(r.usage).toEqual({ inputTokens: 120, outputTokens: 30 });
+	});
+
+	it('ohne usage bleibt der Verbrauch unbekannt, nicht 0', async () => {
+		const r = await echteModellDeps({
+			ziel: { id: 'r', baseUrl: 'http://r.invalid/v1', apiKey: 'k', model: 'm' },
+			fetchImpl: antwort(undefined)
+		}).frageModell('x');
+		expect(r.usage).toBeNull();
 	});
 });

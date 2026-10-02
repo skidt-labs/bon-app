@@ -14,6 +14,11 @@
 	const zeit = (d: Date | string | null) =>
 		d ? new Date(d).toLocaleString('de-DE', { dateStyle: 'short', timeStyle: 'short' }) : 'nie';
 	const modelleFuer = (id: string) => (form && 'modelle' in form && form.fuer === id ? form.modelle : []);
+	// Cloud-Reserve (Entwurf 2026-10-01): Millionstel Euro → „0,12 €"; Uhrzeit in Berliner Zeit.
+	const euro = (micro: number) => `${(Math.round(micro / 10_000) / 100).toFixed(2).replace('.', ',')} €`;
+	const uhr = (d: Date | string | null) =>
+		d ? new Date(d).toLocaleString('de-DE', { timeZone: 'Europe/Berlin', dateStyle: 'short', timeStyle: 'short' }) : '';
+	const grenzeEuro = $derived((data.reserve.grenzeMicro / 1_000_000).toFixed(2).replace('.', ','));
 </script>
 
 {#snippet formular(a: (typeof data.anbieter)[number] | null)}
@@ -117,6 +122,45 @@
 			<p class="text-gedaempft">Bildweg: {data.bildwegFrei ? 'in der .env freigegeben' : 'gesperrt'}.</p>
 		</section>
 
+		<section
+			class="rounded-xl border p-4 text-[13px] {data.reserve.zustand === 'aktiv'
+				? 'border-bernstein-strich bg-bernstein-flaeche'
+				: data.reserve.zustand === 'grenze'
+					? 'border-rot bg-rot-flaeche'
+					: 'border-linie bg-papier'}"
+		>
+			<h2 class="text-sm font-extrabold">Reserve</h2>
+			{#if data.reserve.zustand === 'keine'}
+				<p class="mt-1">Keine Reserve eingerichtet. Ist der Mac nicht erreichbar, warten die Bons auf ihn.</p>
+			{:else if data.reserve.zustand === 'bereit'}
+				<p class="mt-1 font-bold">Bereit: {data.reserve.name} · {data.reserve.modell}</p>
+				<p class="text-gedaempft">Springt ein, wenn der Mac nicht erreichbar ist — nur mit dem OCR-Text, nie mit dem Foto.</p>
+			{:else if data.reserve.zustand === 'aktiv'}
+				<p class="mt-1 font-bold text-bernstein">
+					Aktiv seit {uhr(data.reserve.aktivSeit)} — der Mac war nicht erreichbar{data.reserve.grund ? ` (${data.reserve.grund})` : ''}.
+				</p>
+				<p class="text-bernstein">{data.reserve.name} liest. Alle 5 Minuten wird geprüft, ob der Mac wieder antwortet.</p>
+			{:else if data.reserve.zustand === 'grenze'}
+				<p class="mt-1 font-bold text-rot-dunkel">Monatsgrenze erreicht — Bons warten auf den Mac.</p>
+			{:else}
+				<p class="mt-1 font-bold">
+					Festgelegt, aber wirkungslos: {data.reserve.grund ?? 'Der Hauptanbieter nutzt den Bildweg. Die Reserve braucht den Textweg.'}
+				</p>
+				<p class="text-gedaempft">Bis das behoben ist, warten Bons auf den Mac, wenn er nicht erreichbar ist.</p>
+			{/if}
+			<p class="mt-2 text-gedaempft">
+				Diesen Monat: {euro(data.reserve.verbrauch.kostenMicro)} von {euro(data.reserve.grenzeMicro)} · {data.reserve.verbrauch.laeufe}
+				{data.reserve.verbrauch.laeufe === 1 ? 'Lauf' : 'Läufe'}
+			</p>
+			<form method="POST" action="?/reserveGrenze" use:enhance={() => async ({ update }) => update({ reset: false })} class="mt-2 flex flex-wrap items-end gap-2">
+				<label class="grid gap-1 font-semibold"
+					>Monatsgrenze (€)
+					<input name="euro" inputmode="decimal" value={grenzeEuro} class="w-28 rounded-lg border border-linie bg-papier px-2 py-1.5" />
+				</label>
+				<button class="rounded-lg bg-chip px-3 py-1.5 text-[12px] font-bold">Grenze speichern</button>
+			</form>
+		</section>
+
 		<section class="flex flex-col gap-3">
 			<div class="flex items-center justify-between">
 				<h2 class="text-sm font-extrabold">Anbieter</h2>
@@ -130,7 +174,11 @@
 			{#each data.anbieter as a (a.id)}
 				<article class="rounded-xl border border-linie bg-papier p-4 text-[13px]">
 					<div class="flex items-baseline justify-between gap-2">
-						<h3 class="font-extrabold">{a.name}{#if a.aktiv}<span class="ml-2 rounded bg-chip px-1.5 py-0.5 text-[11px]">aktiv</span>{/if}</h3>
+						<h3 class="font-extrabold">
+							{a.name}{#if a.aktiv}<span class="ml-2 rounded bg-chip px-1.5 py-0.5 text-[11px]">aktiv</span>{/if}{#if a.reserve}<span
+									class="ml-2 rounded bg-bernstein-flaeche px-1.5 py-0.5 text-[11px] text-bernstein">Reserve</span
+								>{/if}
+						</h3>
 						<span class="text-gedaempft">{wegText(a.weg)}</span>
 					</div>
 					<p class="mt-1">{a.modell} · <span class="text-gedaempft">{a.baseUrl}</span></p>
@@ -150,17 +198,30 @@
 							<button class="rounded-lg bg-chip px-3 py-1 text-[12px] font-bold">Testen</button>
 						</form>
 						<button onclick={() => (offen = a.id)} class="rounded-lg bg-chip px-3 py-1 text-[12px] font-bold">Bearbeiten</button>
-						{#if !a.aktiv}
+						{#if a.reserve}
+							<form method="POST" action="?/reserveEntfernen" use:enhance>
+								<button class="rounded-lg bg-chip px-3 py-1 text-[12px] font-bold">Reserve entfernen</button>
+							</form>
+						{:else if !a.aktiv}
 							<form method="POST" action="?/aktivieren" use:enhance>
 								<input type="hidden" name="id" value={a.id} />
 								<button disabled={a.testOk !== true} class="rounded-lg bg-tinte px-3 py-1 text-[12px] font-bold text-papier disabled:opacity-40">Aktivieren</button>
 							</form>
+							{#if a.reserveGrund === null}
+								<form method="POST" action="?/reserveFestlegen" use:enhance>
+									<input type="hidden" name="id" value={a.id} />
+									<button class="rounded-lg bg-chip px-3 py-1 text-[12px] font-bold">Als Reserve festlegen</button>
+								</form>
+							{/if}
 							<form method="POST" action="?/loeschen" use:enhance>
 								<input type="hidden" name="id" value={a.id} />
 								<button class="rounded-lg bg-chip px-3 py-1 text-[12px] font-bold">Löschen</button>
 							</form>
 						{/if}
 					</div>
+					{#if !a.reserve && !a.aktiv && a.reserveGrund}
+						<p class="mt-1 text-[12px] text-gedaempft">Als Reserve: {a.reserveGrund}</p>
+					{/if}
 					{#if offen === a.id}{@render formular(a)}{/if}
 				</article>
 			{:else}

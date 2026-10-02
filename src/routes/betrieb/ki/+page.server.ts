@@ -13,7 +13,14 @@ import {
 	kiStandLesen,
 	NichtGetestet,
 	SchluesselFehlt,
-	zurueckAufEnv
+	zurueckAufEnv,
+	AnbieterIstReserve,
+	ReserveNichtMoeglich,
+	grenzeAusFormular,
+	reserveEntfernen,
+	reserveFestlegen,
+	reserveGrenzeSpeichern,
+	reserveStand
 } from '$lib/server/betrieb/ki';
 import { anbieterTesten, gespeicherterSchluessel, modelleAbrufen } from '$lib/server/betrieb/ki-probe';
 import { bildwegIstBestaetigt, konfigAusEnv } from '$lib/server/extraction';
@@ -47,10 +54,11 @@ function ocrStand() {
 
 export const load: PageServerLoad = async ({ locals }) => {
 	nurBetreiber(locals);
-	const [anbieter, stand] = await Promise.all([anbieterListe(), kiStandLesen()]);
+	const [anbieter, stand, reserve] = await Promise.all([anbieterListe(), kiStandLesen(), reserveStand()]);
 	const env = envStand();
 	return {
 		anbieter,
+		reserve,
 		aktivId: stand.aktivId,
 		env,
 		zurueckGesperrt: env.fehler ? zurueckGesperrt(env.fehler) : null,
@@ -120,6 +128,7 @@ export const actions: Actions = {
 			if (err instanceof BildwegNichtFreigegeben) {
 				return fail(409, { grund: BILDWEG_SATZ });
 			}
+			if (err instanceof AnbieterIstReserve) return fail(409, { grund: 'Die Reserve lässt sich nicht aktivieren. Erst „Reserve entfernen“.' });
 			if (err instanceof AnbieterNichtGefunden) return fail(404, { grund: 'Diesen Anbieter gibt es nicht mehr.' });
 			throw err;
 		}
@@ -143,10 +152,40 @@ export const actions: Actions = {
 			await anbieterLoeschen(id(f), b.id);
 		} catch (err) {
 			if (err instanceof AnbieterAktiv) return fail(409, { grund: 'Der aktive Anbieter lässt sich nicht löschen. Erst einen anderen aktivieren oder zurück auf .env.' });
+			if (err instanceof AnbieterIstReserve) return fail(409, { grund: 'Die Reserve lässt sich nicht löschen. Erst „Reserve entfernen“.' });
 			if (err instanceof AnbieterNichtGefunden) return fail(404, { grund: 'Diesen Anbieter gibt es nicht mehr.' });
 			throw err;
 		}
 		return { geloescht: true };
+	},
+
+	// Cloud-Reserve (Entwurf 2026-10-01)
+	reserveFestlegen: async ({ locals, request }) => {
+		const b = nurBetreiber(locals);
+		const f = await request.formData();
+		try {
+			await reserveFestlegen(id(f), b.id);
+		} catch (err) {
+			if (err instanceof ReserveNichtMoeglich) return fail(409, { grund: err.grund });
+			if (err instanceof AnbieterNichtGefunden) return fail(404, { grund: 'Diesen Anbieter gibt es nicht mehr.' });
+			throw err;
+		}
+		return { reserveGesetzt: true };
+	},
+
+	reserveEntfernen: async ({ locals }) => {
+		const b = nurBetreiber(locals);
+		await reserveEntfernen(b.id);
+		return { reserveEntfernt: true };
+	},
+
+	reserveGrenze: async ({ locals, request }) => {
+		const b = nurBetreiber(locals);
+		const f = await request.formData();
+		const micro = grenzeAusFormular(String(f.get('euro') ?? ''));
+		if (micro === null) return fail(400, { grund: 'Bitte einen Betrag in Euro, größer als 0 und höchstens 1000.' });
+		await reserveGrenzeSpeichern(micro, b.id);
+		return { grenzeGespeichert: true };
 	},
 
 	modelle: async ({ locals, request }) => {

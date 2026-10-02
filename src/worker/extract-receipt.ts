@@ -22,6 +22,8 @@ import { readFile } from 'node:fs/promises';
 import { haendlerAufloesen } from '$lib/server/merchants';
 import { bonEinsortieren } from '$lib/server/kategorien/einsortieren';
 import { echteModellDeps } from '$lib/server/kategorien/modell';
+import { NICHT_ERREICHBAR_HTTP } from '$lib/server/ki/umschalten';
+import type { TextModellZiel } from '$lib/server/extraction/ocr-text-provider';
 import { notifyMatrix } from '$lib/server/notify';
 import { DOPPEL_GRUND, originalFuerNeuenBon } from '$lib/server/bons/doppelt';
 
@@ -37,7 +39,7 @@ import { DOPPEL_GRUND, originalFuerNeuenBon } from '$lib/server/bons/doppelt';
  * abwesender Server — der Betreiber nennt 2-3 gleichzeitige Anfragen als realistische
  * Grenze.
  *
- *  - HTTP 503/429       → vorübergehend (`ExtractionHttpError.status`, siehe
+ *  - HTTP 503/429/502/504 → vorübergehend (`ExtractionHttpError.status`, siehe
  *                          extraction/types.ts — beide Anbieter werfen diesen Typ)
  *  - Verbindungsabbruch → vorübergehend: Node/undici wirft bei einem echten
  *                          Netzwerkfehler (Mac nicht erreichbar, DNS, Reset, ...)
@@ -68,7 +70,9 @@ export function istVoruebergehenderFehler(err: unknown): boolean {
   // eigener Container ist. Tesseract meldet hier weiterhin nie `voruebergehend` — sein
   // Verhalten bleibt unveraendert dauerhaft.
   if (err instanceof OcrWerkzeugKaputtError) return err.voruebergehend;
-  if (err instanceof ExtractionHttpError) return err.status === 503 || err.status === 429;
+  // 503/429 (beschaeftigt) und 502/504 (Gateway-Fehler des HTTPS-Vorbaus, MLX-Prozess tot) —
+  // dieselbe Liste wie beim Umschalten auf die Cloud-Reserve (ki/umschalten.ts).
+  if (err instanceof ExtractionHttpError) return NICHT_ERREICHBAR_HTTP.has(err.status);
   if (err instanceof TypeError && err.message === 'fetch failed') return true;
   if (err instanceof DOMException) return err.name === 'TimeoutError' || err.name === 'AbortError';
   return false;
@@ -161,6 +165,12 @@ export type ExtractDeps = {
    * Wiederholungsbudget ausgeschöpft ist, für immer auf 'extracting' stehen.
    */
   getRetryInfo: (jobId: string) => Promise<RetryInfo>;
+  /**
+   * Cloud-Reserve: zu Beginn JEDES Auftrags, noch vor dem Laden des Bildes — die Rolle des
+   * Anbieters steht dann wieder auf dem Hauptanbieter. Ein Bon, der vor dem Modellaufruf
+   * scheitert, erbt so nicht die des vorigen (Abschlusspruefung 02.10.2026).
+   */
+  auftragBeginnt?: () => void;
 };
 
 export async function handleExtractJobs(
@@ -172,6 +182,7 @@ export async function handleExtractJobs(
   for (const job of jobs) {
     const { receiptId } = job.data;
     const startedAt = Date.now();
+    deps.auftragBeginnt?.();
     try {
       const image = await deps.loadImage(receiptId);
       if (image === null) {
@@ -493,9 +504,19 @@ export function assertBatchSizeOne(batchSize: number): void {
  * Fehlen sie (Tests, alter Aufruf), gilt: .env-Weg, Preise aus der .env.
  */
 export function productionDeps(
-  provider: ExtractionProvider & { readonly kiAnbieterId?: string | null; readonly preise?: Preise }
+  provider: ExtractionProvider & {
+    readonly kiAnbieterId?: string | null;
+    readonly preise?: Preise;
+    /** Cloud-Reserve: wer gelesen hat — Hauptanbieter oder Reserve (ki/aktiv.ts). */
+    readonly kiRolle?: 'haupt' | 'reserve';
+    /** Wohin die Kategorien fragen: an das Modell, das den Bon gelesen hat. Fehlt es: .env. */
+    readonly kategorienZiel?: TextModellZiel;
+    neuerAuftrag?: () => void;
+  }
 ): ExtractDeps {
   return {
+    auftragBeginnt: () => provider.neuerAuftrag?.(),
+
     async loadImage(receiptId) {
       const [row] = await db
         .select({ imagePath: receipts.imagePath })
@@ -532,6 +553,7 @@ export function productionDeps(
       }
       const gruende = vermutetesOriginalId ? [...problems, DOPPEL_GRUND] : problems;
 
+      let laufId: string | null = null;
       await db.transaction(async (tx) => {
         await tx.delete(receiptItems).where(eq(receiptItems.receiptId, receiptId));
         const sanitized = sanitizeItemsForInsert(result.items);
@@ -606,10 +628,11 @@ export function productionDeps(
           .returning({ id: receipts.id });
         if (kopf.length === 0) throw new BonNichtMehrOffen(receiptId);
 
-        await tx.insert(extractionRuns).values({
+        const [lauf] = await tx.insert(extractionRuns).values({
           receiptId,
           provider: pid,
           kiAnbieterId: provider.kiAnbieterId ?? null,
+          kiRolle: provider.kiRolle ?? null,
           ...modellFelder(servedModel, model),
           // Die ROHE Antwort, nicht `result`: das Schema faltet Adressobjekte zu
           // Strings, schreibt Einheiten klein und ersetzt Unbekanntes durch
@@ -633,7 +656,8 @@ export function productionDeps(
           inputTokens: usage?.inputTokens ?? null,
           outputTokens: usage?.outputTokens ?? null,
           costMicroEuros: kostenAusTokens(usage, provider.preise ?? preiseAusEnv())
-        });
+        }).returning({ id: extractionRuns.id });
+        laufId = lauf?.id ?? null;
       });
       // Kategorien NACH der Transaktion, nicht darin: der Modellaufruf dauert Sekunden,
       // und eine Transaktion, die so lange offen steht, haelt Verbindung und Sperren
@@ -642,9 +666,26 @@ export function productionDeps(
       //
       // bonEinsortieren wirft nie: eine Kategorie ist wuenschenswert, ein Bon ist
       // unverzichtbar. Was schiefging, wird protokolliert, nicht geworfen.
-      const eingeordnet = await bonEinsortieren(receiptId, echteModellDeps());
+      const eingeordnet = await bonEinsortieren(receiptId, echteModellDeps({ ziel: provider.kategorienZiel ?? null }));
       if (eingeordnet.fehler) {
         console.error(`[worker] Kategorien für Bon ${receiptId}: ${eingeordnet.fehler}`);
+      }
+      // Cloud-Reserve: was die Kategorien verbrauchten, gehoert in DENSELBEN Lauf — es zaehlt
+      // zur Monatsgrenze der Reserve. Scheitert der Nachtrag, bleibt der Bon trotzdem gespeichert.
+      if (laufId && eingeordnet.usage) {
+        try {
+          await db
+            .update(extractionRuns)
+            .set({
+              kategorienInputTokens: eingeordnet.usage.inputTokens,
+              kategorienOutputTokens: eingeordnet.usage.outputTokens,
+              kategorienKostenMicro: kostenAusTokens(eingeordnet.usage, provider.preise ?? preiseAusEnv())
+            })
+            .where(eq(extractionRuns.id, laufId));
+        } catch (fehler) {
+          const meldung = fehler instanceof Error ? fehler.message : String(fehler);
+          console.error(`[worker] Kategorie-Verbrauch für Bon ${receiptId} nicht gespeichert: ${meldung}`);
+        }
       }
       if (eingeordnet.verworfen.length > 0) {
         // Erfundene Kategorien verschwinden nicht still — schlaegt das Modell dieselbe
@@ -677,6 +718,7 @@ export function productionDeps(
         provider: provider.id,
         model: provider.model,
         kiAnbieterId: provider.kiAnbieterId ?? null,
+        kiRolle: provider.kiRolle ?? null,
         error: reason.slice(0, 500),
         // undefined würde Drizzle die Spalte weglassen lassen; null sagt ausdrücklich
         // "es gab keine Antwort" (Netzfehler, Zeitüberschreitung) und ist damit vom

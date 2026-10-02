@@ -10,11 +10,32 @@ vi.mock('$lib/server/betrieb/ki', async () => {
 	class AnbieterAktiv extends Error {}
 	class AnbieterNichtGefunden extends Error {}
 	class SchluesselFehlt extends Error {}
+	class AnbieterIstReserve extends Error {}
+	class ReserveNichtMoeglich extends Error {
+		constructor(readonly grund: string) {
+			super(grund);
+		}
+	}
 	return {
 		NichtGetestet,
 		AnbieterAktiv,
 		AnbieterNichtGefunden,
 		SchluesselFehlt,
+		AnbieterIstReserve,
+		ReserveNichtMoeglich,
+		reserveFestlegen: vi.fn(),
+		reserveEntfernen: vi.fn(),
+		reserveGrenzeSpeichern: vi.fn(),
+		grenzeAusFormular: vi.fn((x: string) => (x === '5' ? 5_000_000 : null)),
+		reserveStand: vi.fn(async () => ({
+			zustand: 'bereit',
+			name: 'Reserve',
+			modell: 'flash',
+			aktivSeit: null,
+			grund: null,
+			verbrauch: { kostenMicro: 0, laeufe: 0 },
+			grenzeMicro: 5_000_000
+		})),
 		eingabeAusFormular: vi.fn(),
 		anbieterListe: vi.fn(async () => []),
 		kiStandLesen: vi.fn(async () => ({ aktivId: null, stand: 0 })),
@@ -36,7 +57,18 @@ vi.mock('$lib/server/betrieb/ki-probe', () => ({
 }));
 
 import { load, actions } from './+page.server';
-import { anbieterAendern, anbieterAnlegen, eingabeAusFormular, NichtGetestet, zurueckAufEnv } from '$lib/server/betrieb/ki';
+import {
+	anbieterAendern,
+	anbieterAnlegen,
+	anbieterLoeschen,
+	eingabeAusFormular,
+	NichtGetestet,
+	zurueckAufEnv,
+	reserveFestlegen,
+	reserveGrenzeSpeichern,
+	ReserveNichtMoeglich,
+	AnbieterIstReserve
+} from '$lib/server/betrieb/ki';
 import { gespeicherterSchluessel } from '$lib/server/betrieb/ki-probe';
 import { BildwegNichtFreigegeben } from '$lib/server/ki/fehler';
 
@@ -126,4 +158,51 @@ describe('/betrieb/ki', () => {
 		await actions.modelle(ereignis(betreiber, { id: 'a1', baseUrl: 'http://neu.invalid/v1' }));
 		expect(gespeicherterSchluessel).toHaveBeenCalledWith('a1', 'http://neu.invalid/v1');
 	});
+
+	// Cloud-Reserve (Entwurf 2026-10-01)
+	it('hat die drei Reserve-Actions — und auch sie sind fuer Fremde 404 (Schleife oben)', () => {
+		expect(Object.keys(actions)).toEqual(expect.arrayContaining(['reserveFestlegen', 'reserveEntfernen', 'reserveGrenze']));
+	});
+
+	it('legt die Reserve fuer den Betreiber fest', async () => {
+		await actions.reserveFestlegen(ereignis(betreiber, { id: 'r1' }));
+		expect(reserveFestlegen).toHaveBeenCalledWith('r1', 'u1');
+	});
+
+	it('nennt den Grund, wenn eine Karte nicht Reserve werden kann', async () => {
+		vi.mocked(reserveFestlegen).mockRejectedValueOnce(new ReserveNichtMoeglich('Erst testen.'));
+		const r = (await actions.reserveFestlegen(ereignis(betreiber, { id: 'r1' }))) as { status: number; data: { grund: string } };
+		expect(r.status).toBe(409);
+		expect(r.data.grund).toBe('Erst testen.');
+	});
+
+	it('weist eine unbrauchbare Monatsgrenze mit 400 ab und speichert nichts', async () => {
+		const r = (await actions.reserveGrenze(ereignis(betreiber, { euro: 'abc' }))) as { status: number; data: { grund: string } };
+		expect(r.status).toBe(400);
+		expect(r.data.grund).toMatch(/Euro/);
+		expect(reserveGrenzeSpeichern).not.toHaveBeenCalled();
+		await actions.reserveGrenze(ereignis(betreiber, { euro: '5' }));
+		expect(reserveGrenzeSpeichern).toHaveBeenCalledWith(5_000_000, 'u1');
+	});
+
+	it('erklaert, warum sich die Reserve nicht loeschen laesst', async () => {
+		vi.mocked(anbieterLoeschen).mockRejectedValueOnce(new AnbieterIstReserve());
+		const r = (await actions.loeschen(ereignis(betreiber, { id: 'r1' }))) as { status: number; data: { grund: string } };
+		expect(r.status).toBe(409);
+		expect(r.data.grund).toMatch(/Reserve entfernen/);
+	});
+
+	it('erklaert, warum sich die Reserve nicht aktivieren laesst', async () => {
+		mocks.fehler = new AnbieterIstReserve();
+		const r = (await actions.aktivieren(ereignis(betreiber, { id: 'r1' }))) as { status: number; data: { grund: string } };
+		expect(r.status).toBe(409);
+		expect(r.data.grund).toMatch(/Reserve entfernen/);
+	});
+
+	it('liefert den Reserve-Stand ohne Schluessel', async () => {
+		const data = (await load(ereignis(betreiber))) as unknown as { reserve: { zustand: string } };
+		expect(data.reserve.zustand).toBe('bereit');
+		expect(JSON.stringify(data)).not.toMatch(/schluesselEnc|sk-/);
+	});
 });
+

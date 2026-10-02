@@ -30,8 +30,16 @@ const mocks = vi.hoisted(() => ({
 	originalFuerNeuenBon: vi.fn<(...a: unknown[]) => Promise<string | null>>(async () => null),
 	// Was das naechste .returning() eines Updates liefert. Leer = „eine Zeile getroffen";
 	// ein vorangestelltes [] stellt „der Bon ist nicht mehr offen" nach.
-	updateReturning: [] as unknown[][]
+	updateReturning: [] as unknown[][],
+	// Cloud-Reserve: was das Einsortieren verbraucht hat, und mit welchem Ziel die Kategorien
+	// gefragt wurden. Voreinstellung: kein Modellaufruf (usage null) — wie ein Bon, den das
+	// Gedaechtnis ganz kannte.
+	bonEinsortieren: vi.fn(async (..._a: unknown[]) => ({ ausGedaechtnis: 0, vomModell: 0, unsortiert: 0, verworfen: [] as { itemId: string; slug: string }[], fehler: null as string | null, usage: null as { inputTokens: number; outputTokens: number } | null })),
+	echteModellDeps: vi.fn((o: unknown) => ({ frageModell: vi.fn(), o }))
 }));
+
+vi.mock('$lib/server/kategorien/einsortieren', () => ({ bonEinsortieren: mocks.bonEinsortieren }));
+vi.mock('$lib/server/kategorien/modell', () => ({ echteModellDeps: mocks.echteModellDeps }));
 
 vi.mock('$lib/server/bons/doppelt', () => ({
 	DOPPEL_GRUND: 'moeglicher_doppelbon',
@@ -53,6 +61,9 @@ vi.mock('$lib/server/db', () => {
 				return {
 					// Wie bisher direkt awaitbar (receiptItems/extractionRuns brauchen nur das).
 					then: (resolve: (v: undefined) => void) => resolve(undefined),
+					// Cloud-Reserve: der Lauf-Insert liefert seine Id, damit der Kategorie-Verbrauch
+					// in DIESELBE Zeile nachgetragen werden kann.
+					returning: () => Promise.resolve([{ id: 'lauf-fake-id' }]),
 					// Zusaetzlich verkettbar wie beim Haendler-Upsert in merchants.ts
 					// (haendlerAufloesen ruft echten Code, der hier auf den Mock trifft):
 					// insert(...).values(...).onConflictDoUpdate(...).returning(...).
@@ -651,5 +662,61 @@ describe('productionDeps — Herkunft des Laufs', () => {
 
 		const runs = mocks.insertCalls.find((c) => c.table === extractionRuns);
 		expect(runs?.values).toMatchObject({ kiAnbieterId: 'a1', costMicroEuros: 15 });
+	});
+});
+
+describe('productionDeps — Rolle und Kategorie-Verbrauch (Cloud-Reserve)', () => {
+	const bon: ExtractedReceipt = {
+		merchantName: 'Laden', merchantAddress: null, purchasedAt: null,
+		totalGrossCents: 100, currency: 'EUR', paymentMethod: null, vatSummary: [],
+		items: [{ lineNo: 1, rawText: 'MILCH', lineType: 'article', quantity: '1', unit: 'stk', unitPriceCents: 100, totalPriceCents: 100, vatClass: 'A', appliesToLine: null }]
+	};
+	const ziel = { id: 'ocr-text', baseUrl: 'http://reserve.invalid/v1', apiKey: 'k', model: 'flash' };
+	const anbieter = () => ({
+		id: 'ocr-text',
+		model: 'flash',
+		extract: vi.fn(),
+		kiAnbieterId: 'r1',
+		preise: { einMicro: 1_000_000, ausMicro: 2_000_000 },
+		kiRolle: 'reserve' as const,
+		kategorienZiel: ziel
+	});
+	const speichern = (deps: ReturnType<typeof productionDeps>) =>
+		deps.saveResult({ receiptId: 'r1', result: bon, raw: bon, servedModel: 'flash', problems: [], provider: 'ocr-text', model: 'flash', durationMs: 5, usage: null, ocrText: 'MILCH 1,00', ocr: null, ocrZeilen: null });
+
+	it('schreibt die Rolle des lesenden Anbieters in den Lauf', async () => {
+		await speichern(productionDeps(anbieter()));
+		const lauf = mocks.insertCalls.find((c) => c.table === extractionRuns);
+		expect(lauf?.values).toMatchObject({ kiRolle: 'reserve', kiAnbieterId: 'r1' });
+	});
+
+	it('fragt die Kategorien beim Ziel des lesenden Anbieters', async () => {
+		await speichern(productionDeps(anbieter()));
+		expect(mocks.echteModellDeps).toHaveBeenCalledWith({ ziel });
+	});
+
+	it('traegt den Kategorie-Verbrauch in dieselbe Lauf-Zeile nach, mit den Preisen des Anbieters', async () => {
+		mocks.bonEinsortieren.mockResolvedValueOnce({ ausGedaechtnis: 0, vomModell: 1, unsortiert: 0, verworfen: [], fehler: null, usage: { inputTokens: 100, outputTokens: 20 } });
+		await speichern(productionDeps(anbieter()));
+		const nachtrag = mocks.updateCalls.filter((c) => c.table === extractionRuns);
+		expect(nachtrag).toHaveLength(1);
+		expect(nachtrag[0].set).toEqual({ kategorienInputTokens: 100, kategorienOutputTokens: 20, kategorienKostenMicro: 140 });
+	});
+
+	it('ohne Kategorie-Verbrauch kein Nachtrag', async () => {
+		await speichern(productionDeps(anbieter()));
+		expect(mocks.updateCalls.filter((c) => c.table === extractionRuns)).toHaveLength(0);
+	});
+
+	it('auch der Fehlschlag-Lauf traegt die Rolle', async () => {
+		await productionDeps(anbieter()).markFailed('r1', 'Schema passt nicht');
+		const lauf = mocks.insertCalls.find((c) => c.table === extractionRuns);
+		expect(lauf?.values).toMatchObject({ kiRolle: 'reserve' });
+	});
+
+	it('setzt zu Beginn jedes Auftrags die Rolle des Anbieters zurueck', () => {
+		const neuerAuftrag = vi.fn();
+		productionDeps({ ...anbieter(), neuerAuftrag }).auftragBeginnt?.();
+		expect(neuerAuftrag).toHaveBeenCalledTimes(1);
 	});
 });

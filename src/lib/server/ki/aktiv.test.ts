@@ -6,7 +6,10 @@ vi.mock('$lib/server/db', () => ({ db: {} }));
 import { erzeugeAufloeser, wechselnderProvider, type KiAnbieterRoh, type AktiverProvider } from './aktiv';
 import { verschluesseln } from './geheimnis';
 import { BildwegNichtFreigegeben, KiKonfigurationFehler, KiSchluesselUnlesbar } from './fehler';
-import type { ProviderKonfig } from '$lib/server/extraction';
+import { textZielAus, type ProviderKonfig } from '$lib/server/extraction';
+import type { Leser, UmschaltDeps } from './umschalten';
+import type { TextModellAntwort } from '$lib/server/extraction/ocr-text-provider';
+import { pruefeOcrQualitaet } from '$lib/server/ocr/qualitaet';
 
 const SECRETS = { SECRETS_KEY: randomBytes(32).toString('base64') };
 
@@ -183,14 +186,22 @@ describe('erzeugeAufloeser: Konfigurationsfehler bleiben voruebergehend', () => 
 describe('wechselnderProvider', () => {
 	it('loest vor jedem extract neu auf und zeigt danach Herkunft und Preise des benutzten Anbieters', async () => {
 		const ergebnis = { receipt: {} } as never;
-		const a = (id: string, model: string): AktiverProvider => ({
-			provider: { id: 'ocr-text', model, extract: vi.fn(async () => ergebnis) },
-			weg: 'text',
-			kiAnbieterId: id,
-			name: id,
-			quelle: 'oberflaeche',
-			preise: { einMicro: 1, ausMicro: 2 }
-		});
+		const a = (id: string, model: string): AktiverProvider => {
+			const konfig: ProviderKonfig = { weg: 'text', baseUrl: `http://${id}.invalid/v1`, apiKey: '', model, timeoutMs: 1 };
+			const leser: Leser = { rolle: 'haupt', name: id, modell: model, kiAnbieterId: id, preise: { einMicro: 1, ausMicro: 2 }, ziel: () => textZielAus(konfig) };
+			return {
+				provider: { id: 'ocr-text', model, extract: vi.fn(async () => ergebnis) },
+				weg: 'text',
+				kiAnbieterId: id,
+				name: id,
+				quelle: 'oberflaeche',
+				preise: { einMicro: 1, ausMicro: 2 },
+				konfig,
+				reserve: null,
+				letzterLeser: () => leser,
+				neuerAuftrag: () => {}
+			};
+		};
 		const folge = [a('neu', 'm2')];
 		const p = wechselnderProvider(async () => folge.shift()!, a('alt', 'm1'));
 		expect(p.model).toBe('m1');
@@ -198,5 +209,151 @@ describe('wechselnderProvider', () => {
 		await p.extract(Buffer.from(''));
 		expect(p.model).toBe('m2');
 		expect(p.kiAnbieterId).toBe('neu');
+	});
+});
+
+// Cloud-Reserve (Entwurf 2026-10-01): der Aufloeser baut zum Hauptanbieter die Reserve mit.
+describe('erzeugeAufloeser mit Reserve', () => {
+	const reserveZeile = (teil: Partial<KiAnbieterRoh> = {}): KiAnbieterRoh =>
+		zeile({ id: 'r1', name: 'Abacus Reserve', baseUrl: 'http://reserve.invalid/v1', modell: 'flash', preisEinMicro: 300_000, preisAusMicro: 2_500_000, ...teil });
+
+	function aufbauMitReserve(opts: {
+		aktivId?: string | null;
+		reserveId?: string | null;
+		haupt?: KiAnbieterRoh | null;
+		reserve?: KiAnbieterRoh | null;
+		umschalt?: Partial<UmschaltDeps>;
+	}) {
+		const zustand = { stand: 1, aktivId: opts.aktivId === undefined ? null : opts.aktivId, reserveId: opts.reserveId === undefined ? 'r1' : opts.reserveId };
+		const ueber: unknown[] = [];
+		const log: string[] = [];
+		const env = {
+			EXTRACTION_PROVIDER: 'ocr-text',
+			EXTRACTION_BASE_URL: 'http://env.invalid/v1',
+			EXTRACTION_API_KEY: 'env-key',
+			EXTRACTION_MODEL: 'env-modell',
+			...SECRETS
+		} as NodeJS.ProcessEnv;
+		const umschaltDeps: UmschaltDeps = {
+			reserveAktivSeit: async () => new Date(),
+			grenzeErreicht: async () => false,
+			umschalten: async () => true,
+			zurueckschalten: async () => {},
+			grenzeMelden: async () => {},
+			frage: vi.fn(async (): Promise<TextModellAntwort> => ({ receipt: {} as never, usage: null, raw: {}, servedModel: null, warnings: [] })),
+			...opts.umschalt
+		};
+		const aufloesen = erzeugeAufloeser({
+			leseStand: async () => ({ ...zustand }),
+			leseAnbieter: async (id) => (id === 'r1' ? (opts.reserve === undefined ? reserveZeile() : opts.reserve) : (opts.haupt === undefined ? zeile() : opts.haupt)),
+			bauen: ((k: ProviderKonfig, o: { modellAufruf?: (t: string, q: unknown, s: undefined) => Promise<unknown> } | undefined) => {
+				ueber.push(o);
+				return {
+					id: 'ocr-text',
+					model: k.model,
+					// Wie der echte Textweg: ein uebergebener Modellaufruf ersetzt das feste Ziel.
+					extract: vi.fn(async () => {
+						if (o?.modellAufruf) await o.modellAufruf('TEXT', pruefeOcrQualitaet('Milch 1,29\nSumme 1,29\n01.01.2026'), undefined);
+						return { receipt: {} } as never;
+					})
+				};
+			}) as never,
+			env,
+			log: (z) => log.push(z),
+			umschalten: () => umschaltDeps
+		});
+		return { aufloesen, zustand, ueber, log, umschaltDeps };
+	}
+
+	it('ohne Reserve: keine Reserve, gelesen hat der Hauptanbieter', async () => {
+		const { aufloesen, ueber } = aufbauMitReserve({ reserveId: null });
+		const a = await aufloesen();
+		expect(a.reserve).toBeNull();
+		expect(a.letzterLeser().rolle).toBe('haupt');
+		expect(ueber[0]).toBeUndefined();
+	});
+
+	it('mit Reserve-Karte auf dem Textweg: Reserve gesetzt, der Bau bekommt einen Modellaufruf', async () => {
+		const { aufloesen, ueber } = aufbauMitReserve({});
+		const a = await aufloesen();
+		expect(a.reserve).toEqual({ kiAnbieterId: 'r1', name: 'Abacus Reserve' });
+		expect((ueber[0] as { modellAufruf?: unknown }).modellAufruf).toBeTypeOf('function');
+		expect(a.konfig).toMatchObject({ weg: 'text', model: 'env-modell' });
+	});
+
+	it('eine Reserve-Karte mit Bildweg wirkt nicht', async () => {
+		const { aufloesen, log } = aufbauMitReserve({ reserve: reserveZeile({ weg: 'bild' }) });
+		const a = await aufloesen();
+		expect(a.reserve).toBeNull();
+		expect(log.some((z) => z.includes('Reserve wirkungslos'))).toBe(true);
+	});
+
+	it('ein Hauptanbieter mit Bildweg nimmt keine Reserve', async () => {
+		const { aufloesen } = aufbauMitReserve({ aktivId: 'a1', haupt: zeile({ weg: 'bild' }) });
+		const a = await aufloesen().catch(() => null);
+		// Ohne Freigabe wirft der Bildweg ohnehin; mit Freigabe darf trotzdem keine Reserve wirken.
+		if (a) expect(a.reserve).toBeNull();
+	});
+
+	// Abschlusspruefung 02.10.: ohne Preise zaehlen ihre Laeufe 0 € — die Monatsgrenze griffe nie.
+	it('eine Reserve-Karte ohne Preise wirkt nicht', async () => {
+		const { aufloesen, log } = aufbauMitReserve({ reserve: reserveZeile({ preisAusMicro: null }) });
+		const a = await aufloesen();
+		expect(a.reserve).toBeNull();
+		expect(log.some((z) => z.includes('Reserve wirkungslos') && z.includes('Preise'))).toBe(true);
+	});
+
+	it('eine neue Reserve bei gleichem ki_stand baut neu', async () => {
+		const { aufloesen, zustand, ueber } = aufbauMitReserve({ reserveId: null });
+		await aufloesen();
+		zustand.reserveId = 'r1';
+		await aufloesen();
+		expect(ueber).toHaveLength(2);
+	});
+
+	it('ein unlesbarer Reserve-Schluessel haelt das Aufloesen nicht auf, erst das Lesen wirft', async () => {
+		const fremd = verschluesseln('sk', 'r1', { SECRETS_KEY: randomBytes(32).toString('base64') } as NodeJS.ProcessEnv);
+		const { aufloesen } = aufbauMitReserve({ reserve: reserveZeile({ schluesselEnc: fremd }) });
+		const a = await aufloesen();
+		expect(a.reserve).not.toBeNull();
+		await expect(a.provider.extract(Buffer.from(''))).rejects.toBeInstanceOf(KiSchluesselUnlesbar);
+	});
+
+	// Abschlusspruefung 02.10.: ein Bon, der vor dem Modellaufruf scheitert, erbt sonst die Rolle
+	// des vorigen — und traegt einen Cloud-Vermerk, obwohl die Cloud ihn nie sah.
+	it('ein neuer Auftrag beginnt wieder beim Hauptanbieter', async () => {
+		const { aufloesen } = aufbauMitReserve({});
+		const start = await aufloesen();
+		const p = wechselnderProvider(aufloesen, start);
+		await p.extract(Buffer.from(''));
+		expect(p.kiRolle).toBe('reserve');
+		p.neuerAuftrag();
+		expect(p.kiRolle).toBe('haupt');
+		expect(p.kiAnbieterId).toBeNull();
+	});
+
+	it('scheitert ein Auftrag vor dem Modellaufruf, traegt er die Rolle des Hauptanbieters', async () => {
+		const { aufloesen } = aufbauMitReserve({});
+		const start = await aufloesen();
+		const p = wechselnderProvider(aufloesen, start);
+		await p.extract(Buffer.from(''));
+		expect(p.kiRolle).toBe('reserve');
+		// Der naechste Bon scheitert an der OCR — kein Modell wurde gefragt.
+		vi.mocked(start.provider.extract).mockRejectedValueOnce(new Error('OCR kaputt'));
+		await expect(p.extract(Buffer.from(''))).rejects.toThrow('OCR kaputt');
+		expect(p.kiRolle).toBe('haupt');
+	});
+
+	it('wechselnderProvider zeigt nach einem Lesen durch die Reserve deren Rolle, Modell, Preise und Ziel', async () => {
+		const { aufloesen } = aufbauMitReserve({});
+		const start = await aufloesen();
+		const p = wechselnderProvider(aufloesen, start);
+		expect(p.kiRolle).toBe('haupt');
+		await p.extract(Buffer.from(''));
+		expect(p.kiRolle).toBe('reserve');
+		expect(p.model).toBe('flash');
+		expect(p.kiAnbieterId).toBe('r1');
+		expect(p.preise).toEqual({ einMicro: 300_000, ausMicro: 2_500_000 });
+		expect(p.kategorienZiel.baseUrl).toBe('http://reserve.invalid/v1');
 	});
 });

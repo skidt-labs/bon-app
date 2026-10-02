@@ -3,8 +3,10 @@ import {
   createOcrTextProvider,
   BonUnlesbarError,
   OcrWerkzeugKaputtError,
-  MAX_TOKENS_STRUKTURIERT
+  MAX_TOKENS_STRUKTURIERT,
+  frageTextModell
 } from './ocr-text-provider';
+import { pruefeOcrQualitaet } from '../ocr/qualitaet';
 import { ExtractionHttpError, ExtractionTruncatedError } from './types';
 import { bonResponseJsonSchema } from './schema';
 import type { ExecFileImpl } from '../ocr/lesen';
@@ -598,4 +600,78 @@ describe('createOcrTextProvider — kein erfundenes Kaufdatum', () => {
 		});
 		expect((await provider.extract(Buffer.from('bild'))).receipt.purchasedAt).toBe('2026-01-01T12:00:00');
 	});
+});
+
+// Cloud-Reserve (Entwurf 2026-10-01): der Modellaufruf ist uebergebbar, damit der Worker
+// „Mac, sonst Reserve" einsetzen kann — die OCR laeuft dabei genau einmal.
+describe('createOcrTextProvider — uebergebener Modellaufruf', () => {
+  it('liest einmal per OCR und gibt Text, Qualitaet und Signal an den Aufruf', async () => {
+    let ocrLaeufe = 0;
+    const execFileImpl: ExecFileImpl = async () => {
+      ocrLaeufe++;
+      return { stdout: LESBARER_TEXT, stderr: '' };
+    };
+    const fetchImpl = vi.fn<typeof fetch>();
+    const antwort = {
+      receipt: { ...basisAntwort([]), items: [] } as never,
+      usage: { inputTokens: 1, outputTokens: 2 },
+      raw: { x: 1 },
+      servedModel: 'anderes',
+      warnings: []
+    };
+    const modellAufruf = vi.fn(async () => antwort);
+    const signal = new AbortController().signal;
+    const provider = createOcrTextProvider({
+      baseUrl: 'https://example.test/v1',
+      apiKey: 'k',
+      model: 'm',
+      fetchImpl,
+      execFileImpl,
+      modellAufruf
+    });
+
+    const r = await provider.extract(Buffer.from('bild'), signal);
+
+    expect(ocrLaeufe).toBe(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(modellAufruf).toHaveBeenCalledTimes(1);
+    const [text, qualitaet, sig] = modellAufruf.mock.calls[0] as unknown as [string, { brauchbar: boolean }, AbortSignal];
+    expect(text).toBe(LESBARER_TEXT);
+    expect(qualitaet.brauchbar).toBe(true);
+    expect(sig).toBe(signal);
+    expect(r.servedModel).toBe('anderes');
+    expect(r.usage).toEqual({ inputTokens: 1, outputTokens: 2 });
+    expect(r.ocrText).toBe(LESBARER_TEXT);
+    expect(r.ocr).not.toBeNull();
+  });
+
+  it('ruft den uebergebenen Aufruf nicht, wenn die Vorpruefung durchfaellt', async () => {
+    const modellAufruf = vi.fn();
+    const provider = createOcrTextProvider({
+      baseUrl: 'https://example.test/v1',
+      apiKey: 'k',
+      model: 'm',
+      execFileImpl: execFileImplMitText(KAUDERWELSCH),
+      modellAufruf
+    });
+
+    await expect(provider.extract(Buffer.from('bild'))).rejects.toBeInstanceOf(BonUnlesbarError);
+    expect(modellAufruf).not.toHaveBeenCalled();
+  });
+});
+
+describe('frageTextModell', () => {
+  it('fragt Adresse, Schluessel und Modell des Ziels', async () => {
+    const fetchImpl = fakeFetchGibt(JSON.stringify(basisAntwort(ZWEI_ARTIKEL)));
+    const r = await frageTextModell(
+      { id: 'reserve-test', baseUrl: 'https://reserve.example.test/v1', apiKey: 'geheim-r', model: 'flash', fetchImpl },
+      LESBARER_TEXT,
+      pruefeOcrQualitaet(LESBARER_TEXT)
+    );
+    const [url, init] = fetchImpl.mock.calls[0];
+    expect(url).toBe('https://reserve.example.test/v1/chat/completions');
+    expect((init?.headers as Record<string, string>).authorization).toBe('Bearer geheim-r');
+    expect(JSON.parse(String(init?.body)).model).toBe('flash');
+    expect(r.receipt.items).toHaveLength(2);
+  });
 });

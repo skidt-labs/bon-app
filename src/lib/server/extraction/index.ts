@@ -2,7 +2,7 @@ import { createOpenAiCompatProvider, STANDARD_ZEITLIMIT_MS } from './openai-comp
 // Die Obergrenze gehoert zur Fristen-Ordnung und steht deshalb dort, nicht hier:
 // das Zeitlimit MUSS vor pg-bosses Auftragsverfall greifen (siehe queue/fristen.ts).
 import { MAX_ZEITLIMIT_MS } from '../queue/fristen';
-import { createOcrTextProvider } from './ocr-text-provider';
+import { createOcrTextProvider, type TextModellAufruf, type TextModellZiel } from './ocr-text-provider';
 import { ocrKonfigurationAusEnv, waehleOcrAnbieter } from '../ocr/konfiguration';
 import type { ExecFileImpl } from '../ocr/lesen';
 import type { OcrAnbieter } from '../ocr/anbieter';
@@ -93,7 +93,7 @@ export function konfigAusEnv(env: NodeJS.ProcessEnv = process.env): ProviderKonf
  */
 export function baueProvider(
   k: ProviderKonfig,
-  overrides?: { fetchImpl?: typeof fetch; execFileImpl?: ExecFileImpl; ocrAnbieter?: OcrAnbieter },
+  overrides?: { fetchImpl?: typeof fetch; execFileImpl?: ExecFileImpl; ocrAnbieter?: OcrAnbieter; modellAufruf?: TextModellAufruf },
   env: NodeJS.ProcessEnv = process.env
 ): ExtractionProvider {
   const gemeinsam = { baseUrl: k.baseUrl, apiKey: k.apiKey, model: k.model, timeoutMs: k.timeoutMs };
@@ -119,8 +119,15 @@ export function baueProvider(
     ocrAnbieter:
       overrides?.ocrAnbieter ??
       waehleOcrAnbieter(ocr.engine, { execFileImpl: overrides?.execFileImpl, paddleUrl: ocr.paddleUrl }),
-    mitBoxen: ocr.mitBoxen
+    mitBoxen: ocr.mitBoxen,
+    // „Mac, sonst Reserve" (ki/umschalten.ts) — nur der Textweg hat einen Modellschritt fuer Text.
+    modellAufruf: overrides?.modellAufruf
   });
+}
+
+/** Das Ziel des Textwegs aus einer Konfiguration — fuer die Reserve und den Kategorien-Aufruf. */
+export function textZielAus(k: ProviderKonfig, id = 'ocr-text'): TextModellZiel {
+  return { id, baseUrl: k.baseUrl, apiKey: k.apiKey, model: k.model, timeoutMs: k.timeoutMs };
 }
 
 /**

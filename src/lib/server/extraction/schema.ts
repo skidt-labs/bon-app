@@ -292,21 +292,41 @@ export const ANTWORT_PFLICHTFELDER_POSITION = [
 	'unitPriceCents', 'totalPriceCents', 'vatClass', 'appliesToLine'
 ] as const;
 
+/** Je MwSt.-Zeile. Alle vier duerfen null sein — Pflicht heisst „hinschreiben", nicht „wissen". */
+export const ANTWORT_PFLICHTFELDER_MWST = ['rate', 'netCents', 'taxCents', 'grossCents'] as const;
+
 function mitPflichtfeldern(schema: Record<string, unknown>): Record<string, unknown> {
 	const kopf: Record<string, unknown> = { ...schema, required: [...ANTWORT_PFLICHTFELDER] };
 	const eigenschaften = kopf.properties as Record<string, any>;
-	// `items` ist nullable und deshalb in ein anyOf gehuellt; der Array-Zweig traegt
-	// das Positionsschema. Ohne diese Suche haengt die Pflichtliste im Nichts.
-	const feld = eigenschaften.items;
-	const zweig = feld.anyOf
-		? feld.anyOf.find((x: Record<string, unknown>) => x.type === 'array')
-		: feld;
-	if (zweig?.items) {
-		zweig.items = { ...zweig.items, required: [...ANTWORT_PFLICHTFELDER_POSITION] };
-	}
+	// `items` und `vatSummary` sind nullable und deshalb in ein anyOf gehuellt; der
+	// Array-Zweig traegt das Zeilenschema. Ohne diese Suche haengt die Pflichtliste im Nichts.
+	const zeilen = (feld: any, pflicht: readonly string[]) => {
+		const zweig = feld?.anyOf ? feld.anyOf.find((x: Record<string, unknown>) => x.type === 'array') : feld;
+		if (zweig?.items) zweig.items = { ...zweig.items, required: [...pflicht] };
+	};
+	zeilen(eigenschaften.items, ANTWORT_PFLICHTFELDER_POSITION);
+	zeilen(eigenschaften.vatSummary, ANTWORT_PFLICHTFELDER_MWST);
 	return kopf;
 }
 
-export const bonResponseJsonSchema = mitPflichtfeldern(
-	z.toJSONSchema(extractedReceiptSchema, { io: 'input' }) as Record<string, unknown>
-);
+/**
+ * Der strenge Modus nach OpenAI-Regeln: JEDES Objekt verbietet Zusatzfelder und verlangt alle
+ * seine Felder. Anlass: Abacus/RouteLLM lehnte das Schema ohne `additionalProperties` mit
+ * HTTP 400 ab (Vorabtest der Cloud-Reserve, 01.10.2026). Fuer den Mac ist es nur strenger.
+ * Rekursiv statt je Pfad: ein spaeter dazukommendes Objekt waere sonst wieder die Luecke.
+ */
+function streng(s: unknown): unknown {
+	if (Array.isArray(s)) return s.map(streng);
+	if (!s || typeof s !== 'object') return s;
+	const o: Record<string, unknown> = Object.fromEntries(Object.entries(s).map(([k, v]) => [k, streng(v)]));
+	if (o.type === 'object' || o.properties) {
+		const felder = Object.keys((o.properties as object | undefined) ?? {});
+		o.additionalProperties = false;
+		o.required = [...new Set([...((o.required as string[] | undefined) ?? []), ...felder])];
+	}
+	return o;
+}
+
+export const bonResponseJsonSchema = streng(
+	mitPflichtfeldern(z.toJSONSchema(extractedReceiptSchema, { io: 'input' }) as Record<string, unknown>)
+) as Record<string, unknown>;

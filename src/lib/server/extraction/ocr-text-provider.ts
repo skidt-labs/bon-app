@@ -9,7 +9,7 @@ import type { ExtractedReceipt } from './schema';
 import { SYSTEM_PROMPT } from './prompt';
 import { OCR_PROMPT_ZUSATZ, OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR } from './ocr-prompt-zusatz';
 import { stripCodeFence, redactSecret, parseUsage, STANDARD_ZEITLIMIT_MS } from './openai-compat';
-import type { ExtractionProvider } from './types';
+import type { ExtractionProvider, ExtractionResult } from './types';
 
 /**
  * Aufgabe 4, Teil A: der Mac-Server (mlx_vlm, Port 8082) unterstützt ECHT erzwungene
@@ -198,6 +198,155 @@ function entferneUnbelegtePfandzeilen(
   return { items: bereinigt, warnings };
 }
 
+/** Wohin der Textweg den OCR-Text schickt — der Mac oder die Reserve (Entwurf 2026-10-01). */
+export type TextModellZiel = {
+  id: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+/** Was der Modellschritt liefert; OCR-Text, Laufdaten und Zeilen fuegt der Anbieter hinzu. */
+export type TextModellAntwort = Pick<ExtractionResult, 'receipt' | 'usage' | 'raw' | 'servedModel' | 'warnings'>;
+
+export type TextModellAufruf = (
+  text: string,
+  qualitaet: OcrQualitaet,
+  signal: AbortSignal | undefined
+) => Promise<TextModellAntwort>;
+
+/**
+ * Der Modellschritt des Textwegs: OCR-Text an EIN Ziel, Antwort durch das Zod-Schema, dazu die
+ * Pfand- und Datumsregel. Herausgeloest, damit der Worker statt des festen Ziels „Mac, sonst
+ * Reserve" einsetzen kann (ki/umschalten.ts) — die OCR laeuft dabei weiterhin genau einmal.
+ */
+export async function frageTextModell(
+  ziel: TextModellZiel,
+  text: string,
+  qualitaet: OcrQualitaet,
+  signal?: AbortSignal
+): Promise<TextModellAntwort> {
+  const timeoutSignal = AbortSignal.timeout(ziel.timeoutMs ?? STANDARD_ZEITLIMIT_MS);
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+
+  const response = await (ziel.fetchImpl ?? fetch)(`${ziel.baseUrl}/chat/completions`, {
+    method: 'POST',
+    signal: combinedSignal,
+    headers: {
+      'content-type': 'application/json',
+      authorization: `Bearer ${ziel.apiKey}`,
+      // Dieselbe Abacus-Edge-WAF-Umgehung wie beim Bildweg — schadet auch gegen
+      // einen anderen Endpunkt nicht.
+      'user-agent': 'bon-app/1.0'
+    },
+    body: JSON.stringify({
+      model: ziel.model,
+      temperature: 0,
+      // Aufgabe 4, Teil A: PFLICHT laut Messung — ohne sie greift serverseitig
+      // 2048, ein entgleistes Modell verbrennt die vollständig. Herleitung siehe
+      // Kommentar bei MAX_TOKENS_STRUKTURIERT oben.
+      max_tokens: MAX_TOKENS_STRUKTURIERT,
+      // ECHT erzwungene Ausgabe (llguidance-Grammatik auf dem Mac), nicht nur ein
+      // Prompt-Hinweis — abgeleitet aus unserem Zod-Schema (schema.ts), nicht von
+      // Hand danebengeschrieben. `strict: true` laut Bericht des Mac-Betreibers.
+      response_format: {
+        type: 'json_schema',
+        json_schema: { name: 'bon', schema: bonResponseJsonSchema, strict: true }
+      },
+      messages: [
+        {
+          role: 'system',
+          content: `${SYSTEM_PROMPT}\n\n${OCR_PROMPT_ZUSATZ}\n\n${OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR}`
+        },
+        {
+          role: 'user',
+          content: `Lies diesen Kassenbon. Der folgende Text stammt aus einer Texterkennung (OCR), nicht aus einem Bild:\n\n${text}`
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    // Derselbe Grund wie beim Bildweg: der rohe Body geht NIE in die geworfene
+    // Fehlermeldung (potenzielle Echo-Antworten/WAF-Seiten mit Header-Daten) —
+    // nur redigiert und gekürzt ins Server-Log.
+    const body = await response.text().catch(() => '');
+    const safeBody = redactSecret(body, ziel.apiKey).slice(0, 500);
+    console.error(
+      `[extraction] ${ziel.id}: HTTP ${response.status} von ${ziel.baseUrl}/chat/completions`,
+      safeBody
+    );
+    // ExtractionHttpError statt eines schlichten Error — derselbe Grund wie beim
+    // Bildweg (openai-compat.ts): Task 3 (Entwurf E7a) muss 503/429 (der Mac ist
+    // gerade beschäftigt, 2-3 gleichzeitige Anfragen sind die gemessene Grenze)
+    // von einem dauerhaften Fehler unterscheiden können.
+    throw new ExtractionHttpError(
+      response.status,
+      `Extraktion fehlgeschlagen: LLM antwortete mit HTTP ${response.status}`
+    );
+  }
+
+  const payload = (await response.json()) as {
+    model?: unknown;
+    choices?: { message?: { content?: string }; finish_reason?: string }[];
+    usage?: unknown;
+  };
+  const content = payload.choices?.[0]?.message?.content;
+
+  // Korrektur des Koordinators (2026-09-15): mit max_tokens: 1200 brach ein
+  // 24-Positionen-Bon nachweislich mitten im JSON ab. `finish_reason: "length"`
+  // ist der maschinenlesbare Beleg GENAU dafür — VOR dem Content-Check und VOR
+  // JSON.parse abgefangen, sonst liefe das als undurchsichtiger SyntaxError oder
+  // (schlimmer) als ExtractionSchemaError durch und sähe wie ein Modell-/
+  // Bonproblem aus, obwohl ein Retry bei gleichem max_tokens deterministisch
+  // wieder an derselben Stelle abbricht (siehe ExtractionTruncatedError).
+  if (payload.choices?.[0]?.finish_reason === 'length') {
+    throw new ExtractionTruncatedError(
+      `Extraktion abgebrochen: die Modellantwort wurde bei max_tokens=${MAX_TOKENS_STRUKTURIERT} ` +
+        `abgeschnitten (finish_reason "length"), bevor das JSON vollständig war. Vermutlich hat ` +
+        `dieser Bon mehr Positionen, als die aktuelle Tokenobergrenze vorsieht — bitte melden ` +
+        `(MAX_TOKENS_STRUKTURIERT anheben), ein erneuter Versuch bricht bei gleicher Eingabe ` +
+        `deterministisch wieder ab.`,
+      content ?? null
+    );
+  }
+  if (!content) throw new Error('Extraktion fehlgeschlagen: LLM-Antwort ohne Inhalt');
+
+  // Erst parsen, DANN validieren — mit der Rohantwort in der Hand (siehe
+  // openai-compat.ts, derselbe Grund: eine abgelehnte Extraktion braucht die
+  // Rohantwort, sonst bleibt nur ein abgeschnittener Fehlertext).
+  const raw: unknown = JSON.parse(stripCodeFence(content));
+  const geprueft = extractedReceiptSchema.safeParse(raw);
+  if (!geprueft.success) {
+    const stellen = geprueft.error.issues
+      .map((i) => `${i.path.join('.') || '(Wurzel)'}: ${i.message}`)
+      .join('; ');
+    throw new ExtractionSchemaError(
+      `Extraktion fehlgeschlagen: Antwort passt nicht zum Schema — ${stellen}`,
+      raw
+    );
+  }
+
+  const { items, warnings } = entferneUnbelegtePfandzeilen(geprueft.data.items, text);
+  const receipt: ExtractedReceipt = { ...geprueft.data, items };
+  // Steht im gelesenen Text kein Datum, kann das Modell keines gelesen haben — es hat
+  // eines erfunden (Echtbetrieb 27.09.2026: 15.01. statt 18.09.). Ein leeres Feld faellt
+  // beim Pruefen auf, ein erfundenes Datum landet unbemerkt im falschen Monat.
+  if (!qualitaet.hatDatum && receipt.purchasedAt !== null) {
+    receipt.purchasedAt = null;
+    warnings.push('Kaufdatum verworfen: im gelesenen Text steht keines — bitte beim Prüfen eintragen.');
+  }
+
+  const servedModel =
+    typeof payload.model === 'string' && payload.model.trim() !== ''
+      ? payload.model.trim()
+      : null;
+
+  return { receipt, usage: parseUsage(payload.usage), raw, servedModel, warnings };
+}
+
 /**
  * Der Textweg-Anbieter (Entwurf E1-E7): Bild → Tesseract auf DIESEM Server →
  * NUR der OCR-Text geht an ein Modell auf der Hardware des Betreibers. Das Bild
@@ -234,9 +383,24 @@ export function createOcrTextProvider(opts: {
   ocrAnbieter?: OcrAnbieter;
   /** Koordinaten und Confidence einsammeln. Gehen heute NICHT an das Modell. */
   mitBoxen?: boolean;
+  /**
+   * Statt des festen Ziels (baseUrl/apiKey/model) einen eigenen Modellaufruf nehmen — fuer
+   * „Mac, sonst Reserve" (ki/umschalten.ts). Fehlt er, fragt der Anbieter wie bisher sein Ziel.
+   */
+  modellAufruf?: TextModellAufruf;
 }): ExtractionProvider {
   const doFetch = opts.fetchImpl ?? fetch;
   const anbieterId = opts.id ?? 'ocr-text';
+  const eigenesZiel: TextModellZiel = {
+    id: anbieterId,
+    baseUrl: opts.baseUrl,
+    apiKey: opts.apiKey,
+    model: opts.model,
+    timeoutMs: opts.timeoutMs,
+    fetchImpl: doFetch
+  };
+  const modellAufruf: TextModellAufruf =
+    opts.modellAufruf ?? ((text, qualitaet, signal) => frageTextModell(eigenesZiel, text, qualitaet, signal));
   const ocr = opts.ocrAnbieter ?? erzeugeTesseractAnbieter({ execFileImpl: opts.execFileImpl });
 
   return {
@@ -274,135 +438,12 @@ export function createOcrTextProvider(opts: {
         throw new BonUnlesbarError(text, qualitaet, lauf, zeilen);
       }
 
-      const timeoutSignal = AbortSignal.timeout(opts.timeoutMs ?? STANDARD_ZEITLIMIT_MS);
-      const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
-
-      const response = await doFetch(`${opts.baseUrl}/chat/completions`, {
-        method: 'POST',
-        signal: combinedSignal,
-        headers: {
-          'content-type': 'application/json',
-          authorization: `Bearer ${opts.apiKey}`,
-          // Dieselbe Abacus-Edge-WAF-Umgehung wie beim Bildweg — schadet auch gegen
-          // einen anderen Endpunkt nicht.
-          'user-agent': 'bon-app/1.0'
-        },
-        body: JSON.stringify({
-          model: opts.model,
-          temperature: 0,
-          // Aufgabe 4, Teil A: PFLICHT laut Messung — ohne sie greift serverseitig
-          // 2048, ein entgleistes Modell verbrennt die vollständig. Herleitung siehe
-          // Kommentar bei MAX_TOKENS_STRUKTURIERT oben.
-          max_tokens: MAX_TOKENS_STRUKTURIERT,
-          // ECHT erzwungene Ausgabe (llguidance-Grammatik auf dem Mac), nicht nur ein
-          // Prompt-Hinweis — abgeleitet aus unserem Zod-Schema (schema.ts), nicht von
-          // Hand danebengeschrieben. `strict: true` laut Bericht des Mac-Betreibers.
-          response_format: {
-            type: 'json_schema',
-            json_schema: { name: 'bon', schema: bonResponseJsonSchema, strict: true }
-          },
-          messages: [
-            {
-              role: 'system',
-              content: `${SYSTEM_PROMPT}\n\n${OCR_PROMPT_ZUSATZ}\n\n${OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR}`
-            },
-            {
-              role: 'user',
-              content: `Lies diesen Kassenbon. Der folgende Text stammt aus einer Texterkennung (OCR), nicht aus einem Bild:\n\n${text}`
-            }
-          ]
-        })
-      });
-
-      if (!response.ok) {
-        // Derselbe Grund wie beim Bildweg: der rohe Body geht NIE in die geworfene
-        // Fehlermeldung (potenzielle Echo-Antworten/WAF-Seiten mit Header-Daten) —
-        // nur redigiert und gekürzt ins Server-Log.
-        const body = await response.text().catch(() => '');
-        const safeBody = redactSecret(body, opts.apiKey).slice(0, 500);
-        console.error(
-          `[extraction] ${anbieterId}: HTTP ${response.status} von ${opts.baseUrl}/chat/completions`,
-          safeBody
-        );
-        // ExtractionHttpError statt eines schlichten Error — derselbe Grund wie beim
-        // Bildweg (openai-compat.ts): Task 3 (Entwurf E7a) muss 503/429 (der Mac ist
-        // gerade beschäftigt, 2-3 gleichzeitige Anfragen sind die gemessene Grenze)
-        // von einem dauerhaften Fehler unterscheiden können.
-        throw new ExtractionHttpError(
-          response.status,
-          `Extraktion fehlgeschlagen: LLM antwortete mit HTTP ${response.status}`
-        );
-      }
-
-      const payload = (await response.json()) as {
-        model?: unknown;
-        choices?: { message?: { content?: string }; finish_reason?: string }[];
-        usage?: unknown;
-      };
-      const content = payload.choices?.[0]?.message?.content;
-
-      // Korrektur des Koordinators (2026-09-15): mit max_tokens: 1200 brach ein
-      // 24-Positionen-Bon nachweislich mitten im JSON ab. `finish_reason: "length"`
-      // ist der maschinenlesbare Beleg GENAU dafür — VOR dem Content-Check und VOR
-      // JSON.parse abgefangen, sonst liefe das als undurchsichtiger SyntaxError oder
-      // (schlimmer) als ExtractionSchemaError durch und sähe wie ein Modell-/
-      // Bonproblem aus, obwohl ein Retry bei gleichem max_tokens deterministisch
-      // wieder an derselben Stelle abbricht (siehe ExtractionTruncatedError).
-      if (payload.choices?.[0]?.finish_reason === 'length') {
-        throw new ExtractionTruncatedError(
-          `Extraktion abgebrochen: die Modellantwort wurde bei max_tokens=${MAX_TOKENS_STRUKTURIERT} ` +
-            `abgeschnitten (finish_reason "length"), bevor das JSON vollständig war. Vermutlich hat ` +
-            `dieser Bon mehr Positionen, als die aktuelle Tokenobergrenze vorsieht — bitte melden ` +
-            `(MAX_TOKENS_STRUKTURIERT anheben), ein erneuter Versuch bricht bei gleicher Eingabe ` +
-            `deterministisch wieder ab.`,
-          content ?? null
-        );
-      }
-      if (!content) throw new Error('Extraktion fehlgeschlagen: LLM-Antwort ohne Inhalt');
-
-      // Erst parsen, DANN validieren — mit der Rohantwort in der Hand (siehe
-      // openai-compat.ts, derselbe Grund: eine abgelehnte Extraktion braucht die
-      // Rohantwort, sonst bleibt nur ein abgeschnittener Fehlertext).
-      const raw: unknown = JSON.parse(stripCodeFence(content));
-      const geprueft = extractedReceiptSchema.safeParse(raw);
-      if (!geprueft.success) {
-        const stellen = geprueft.error.issues
-          .map((i) => `${i.path.join('.') || '(Wurzel)'}: ${i.message}`)
-          .join('; ');
-        throw new ExtractionSchemaError(
-          `Extraktion fehlgeschlagen: Antwort passt nicht zum Schema — ${stellen}`,
-          raw
-        );
-      }
-
-      const { items, warnings } = entferneUnbelegtePfandzeilen(geprueft.data.items, text);
-      const receipt: ExtractedReceipt = { ...geprueft.data, items };
-      // Steht im gelesenen Text kein Datum, kann das Modell keines gelesen haben — es hat
-      // eines erfunden (Echtbetrieb 27.09.2026: 15.01. statt 18.09.). Ein leeres Feld faellt
-      // beim Pruefen auf, ein erfundenes Datum landet unbemerkt im falschen Monat.
-      if (!qualitaet.hatDatum && receipt.purchasedAt !== null) {
-        receipt.purchasedAt = null;
-        warnings.push('Kaufdatum verworfen: im gelesenen Text steht keines — bitte beim Prüfen eintragen.');
-      }
-
-      const servedModel =
-        typeof payload.model === 'string' && payload.model.trim() !== ''
-          ? payload.model.trim()
-          : null;
+      const antwort = await modellAufruf(text, qualitaet, signal);
 
       // ocrText: der Text, der tatsaechlich an das Modell ging (Entwurf E5) — der
       // einzige Beleg, was gelesen wurde, unabhaengig davon, ob das Modell ihn richtig
       // gedeutet hat.
-      return {
-        receipt,
-        usage: parseUsage(payload.usage),
-        raw,
-        servedModel,
-        warnings,
-        ocrText: text,
-        ocr: lauf,
-        ocrZeilen: zeilen
-      };
+      return { ...antwort, ocrText: text, ocr: lauf, ocrZeilen: zeilen };
     }
   };
 }

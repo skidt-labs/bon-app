@@ -89,3 +89,18 @@ export function bildVersion(pfad: string): string {
 	const name = pfad.split('/').pop() ?? pfad;
 	return name.replace(/\.[^.]+$/, '');
 }
+
+/**
+ * Hat die Cloud-Reserve diesen Bon gelesen? Nur dann steht in der Pruefansicht der Vermerk
+ * (Entwurf 2026-10-01-cloud-reserve). Ein gescheiterter oder wartender Bon wurde von niemandem
+ * gelesen; liest der Mac ihn neu, traegt der neue Lauf `haupt`, und der Vermerk faellt weg.
+ *
+ * `lauf` ist der JUENGSTE Lauf, und er muss gelungen sein: ein gescheiterter, danach von Hand
+ * eingetragener Bon traegt Zahlen eines Menschen, nicht der Reserve (Abschlusspruefung 02.10.).
+ */
+export function vonReserveGelesen(
+	status: string,
+	lauf: { kiRolle: string | null; error: string | null } | undefined
+): boolean {
+	return (status === 'review' || status === 'confirmed') && lauf?.error === null && lauf.kiRolle === 'reserve';
+}

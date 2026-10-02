@@ -7,6 +7,7 @@ import { bonLaden, bonPositionenLaden } from '$lib/server/bons/liste';
 import { stapelLaden } from '$lib/server/receipts/stapel';
 import { originalKurz } from '$lib/server/bons/doppelt';
 import { darfBonVerwerfen } from '$lib/server/zugriff/kontext';
+import { vonReserveGelesen } from '$lib/bons/anzeige';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -33,7 +34,7 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 	// keine Boxen hatte: dann zeigt die Pruefansicht keinen Rahmen und sagt das
 	// (Etappe 3), statt zu raten.
 	const [lauf] = await db
-		.select({ ocrZeilen: extractionRuns.ocrZeilen })
+		.select({ ocrZeilen: extractionRuns.ocrZeilen, kiRolle: extractionRuns.kiRolle, error: extractionRuns.error })
 		.from(extractionRuns)
 		.where(eq(extractionRuns.receiptId, receipt.id))
 		.orderBy(desc(extractionRuns.createdAt))
@@ -71,6 +72,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		kategorien,
 		stapel,
 		original,
+		// Cloud-Reserve: der Vermerk, wenn der juengste Lauf von der Reserve kam (Entwurf 2026-10-01).
+		vonReserve: vonReserveGelesen(receipt.status, lauf),
 		// Verwerfen darf, wer ihn hochgeladen hat, und der Verwalter (bons/papierkorb.ts).
 		darfVerwerfen: darfBonVerwerfen(k, receipt.uploadedBy)
 	};

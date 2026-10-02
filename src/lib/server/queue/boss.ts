@@ -18,6 +18,9 @@ export type MatrixBerichtJob = { userId: string; text: string };
 /** Taeglich 04:30: Bons, die laenger als 30 Tage im Papierkorb liegen, endgueltig loeschen. */
 export const QUEUE_PAPIERKORB = 'papierkorb-leeren';
 
+/** Alle 5 Minuten, solange die Cloud-Reserve liest: antwortet der Mac wieder? (Entwurf 2026-10-01) */
+export const QUEUE_KI_PRUEFEN = 'ki-haupt-pruefen';
+
 let instance: PgBoss | null = null;
 let starting: Promise<PgBoss> | null = null;
 
@@ -36,6 +39,7 @@ async function start(): Promise<PgBoss> {
 		await boss.createQueue(QUEUE_EXTRACT);
 		await boss.createQueue(QUEUE_MATRIX_BERICHT);
 		await boss.createQueue(QUEUE_PAPIERKORB);
+		await boss.createQueue(QUEUE_KI_PRUEFEN);
 	} catch (err) {
 		// Scheitert createQueue, ist boss.start() bereits durch: die Instanz hält einen
 		// offenen Pool und laufende Intervalle. Ohne dieses stop() bliebe bei JEDEM

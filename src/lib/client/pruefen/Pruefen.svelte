@@ -66,6 +66,8 @@
 			stapel: Stapel;
 			/** Hochgeladen oder Verwalter: darf verwerfen, zurueckholen, endgueltig loeschen. */
 			darfVerwerfen: boolean;
+			/** Hat die Cloud-Reserve den Bon gelesen? Dann ein ruhiger Vermerk (Entwurf 2026-10-01). */
+			vonReserve?: boolean;
 		};
 	} = $props();
 
@@ -790,6 +792,13 @@
 					{#each sperren as s (s)}<span class="text-rot-dunkel">{s}</span>{/each}
 					{#if beanstandungen.length}<span>{beanstandungen.join(' · ')}</span>{/if}
 				</div>
+			{/if}
+
+			{#if data.vonReserve}
+				<!-- Cloud-Reserve: ein Hinweis, kein Warnstreifen — er sperrt nichts. -->
+				<p class="px-1 text-[12px] text-gedaempft">
+					☁ Von der Reserve gelesen (Cloud-Dienst), weil der Mac nicht erreichbar war.
+				</p>
 			{/if}
 
 			<Positionen

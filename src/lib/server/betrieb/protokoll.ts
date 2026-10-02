@@ -14,6 +14,14 @@ export type ProtokollAktion =
 	| 'ki.aktiviert'
 	| 'ki.zurueck_auf_env'
 	| 'ki.geloescht'
+	// Cloud-Reserve (Entwurf 2026-10-01): die ersten drei vom Betreiber, die letzten drei vom
+	// Worker (ohne Benutzer).
+	| 'ki.reserve_gesetzt'
+	| 'ki.reserve_entfernt'
+	| 'ki.reserve_grenze'
+	| 'ki.reserve_aktiv'
+	| 'ki.reserve_zurueck'
+	| 'ki.reserve_grenze_erreicht'
 	| 'haushalt.angelegt'
 	| 'haushalt.geloescht'
 	| 'nutzer.gesperrt'
