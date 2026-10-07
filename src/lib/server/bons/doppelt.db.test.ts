@@ -7,9 +7,9 @@ import { DOPPEL_GRUND, doppeltEntscheiden, originalKurz, vermutetesOriginal } fr
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
 
 /**
- * Live-Waechter gegen die LAUFENDE Datenbank — hinter RUN_DB_TESTS=1:
+ * Live-Waechter gegen die Test-Datenbank — hinter RUN_DB_TESTS=1:
  *
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/bons/doppelt.db.test.ts
  *
  * Schreibt in EINER Transaktion und wirft am Ende, damit Postgres alles zuruecknimmt. Ein

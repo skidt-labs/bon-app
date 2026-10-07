@@ -1,8 +1,9 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1.
  * Läuft nicht in der normalen Suite (die muss ohne Datenbank auskommen).
  *
- *   RUN_DB_TESTS=1 npx vitest run src/lib/server/matrix/links.db.test.ts
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
+ *     npx vitest run src/lib/server/matrix/links.db.test.ts
  *
  * Befund R02, Schicht 3 (die eigentliche Absicherung): nutzerZuMatrixId() muss den
  * Haushalt über einen INNER JOIN auf household_members auflösen, nicht über das

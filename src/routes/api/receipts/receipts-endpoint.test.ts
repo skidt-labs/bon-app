@@ -12,7 +12,8 @@ const mocks = vi.hoisted(() => ({
 	enqueueExtraction: vi.fn(),
 	insertReturning: vi.fn(),
 	updateSet: vi.fn(),
-	updateWhere: vi.fn()
+	updateWhere: vi.fn(),
+	loescheBilder: vi.fn(async (_pfade: string[]) => {})
 }));
 
 // istSystemfehler() bleibt die ECHTE Implementierung (reine Funktion, ohne
@@ -22,7 +23,7 @@ const mocks = vi.hoisted(() => ({
 // erwarteten 422/503.
 vi.mock('$lib/server/storage/images', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('$lib/server/storage/images')>();
-	return { ...actual, storeReceiptImage: mocks.storeReceiptImage };
+	return { ...actual, storeReceiptImage: mocks.storeReceiptImage, loescheBilder: mocks.loescheBilder };
 });
 
 vi.mock('$lib/server/queue/boss', () => ({
@@ -125,6 +126,19 @@ describe('POST /api/receipts – Fehler beim Speichern des Bilds', () => {
 		expect(isHttpError(caught, 503)).toBe(true);
 	});
 
+	// Sammelfassung N2: eine Pruefung fuer alle Wege — ein nicht eigens bedachter Errno-Code
+	// (hier ESTALE) ist ein Systemfehler, kein kaputtes Bild. Vorher 422: Foto weg.
+	it('meldet 503 auch bei einem nicht eigens bedachten Errno-Code (ESTALE)', async () => {
+		mocks.storeReceiptImage.mockRejectedValue(Object.assign(new Error('stale file handle'), { code: 'ESTALE' }));
+		let caught: unknown;
+		try {
+			await POST(fakeEvent('upload'));
+		} catch (err) {
+			caught = err;
+		}
+		expect(isHttpError(caught, 503)).toBe(true);
+	});
+
 	it('meldet weiterhin 422 bei einem Dekodierfehler ohne .code — die Outbox darf aufraeumen', async () => {
 		mocks.storeReceiptImage.mockRejectedValue(new Error('Input buffer contains unsupported image format'));
 
@@ -135,5 +149,30 @@ describe('POST /api/receipts – Fehler beim Speichern des Bilds', () => {
 			caught = err;
 		}
 		expect(isHttpError(caught, 422)).toBe(true);
+	});
+});
+
+// Sammelfassung 4.2: scheitert das Anlegen der Bon-Zeile, zeigt nichts auf die gerade
+// gespeicherten Dateien — sie werden wieder geloescht, statt verwaist liegen zu bleiben.
+describe('POST /api/receipts – Anlegen scheitert nach dem Speichern', () => {
+	beforeEach(() => {
+		vi.clearAllMocks();
+		mocks.storeReceiptImage.mockResolvedValue({ imagePath: '2026/09/x.webp', thumbPath: '2026/09/x.thumb.webp' });
+	});
+
+	it('loescht die frisch gespeicherten Dateien und reicht den Fehler weiter', async () => {
+		mocks.insertReturning.mockRejectedValue(new Error('Verbindung weg'));
+		await expect(POST(fakeEvent('upload'))).rejects.toThrow('Verbindung weg');
+		expect(mocks.loescheBilder).toHaveBeenCalledWith(['2026/09/x.webp', '2026/09/x.thumb.webp']);
+		expect(mocks.enqueueExtraction).not.toHaveBeenCalled();
+	});
+
+	it('loescht nichts, wenn der Bon steht — auch nicht, wenn nur das Einreihen scheitert', async () => {
+		mocks.insertReturning.mockResolvedValue([{ id: 'receipt-1' }]);
+		mocks.updateWhere.mockResolvedValue(undefined);
+		mocks.enqueueExtraction.mockRejectedValue(new Error('pg-boss ist nicht erreichbar'));
+		const res = await POST(fakeEvent('upload'));
+		expect(res.status).toBe(201);
+		expect(mocks.loescheBilder).not.toHaveBeenCalled();
 	});
 });

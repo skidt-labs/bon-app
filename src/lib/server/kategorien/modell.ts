@@ -3,6 +3,7 @@ import { stripCodeFence, parseUsage } from '$lib/server/extraction/openai-compat
 import type { TextModellZiel } from '$lib/server/extraction/ocr-text-provider';
 import type { ExtractionUsage } from '$lib/server/extraction/types';
 import type { ZuOrdnendeZeile } from './kaskade';
+import { NACHFRAGE_MINDEST_REST_MS, type AuftragsFrist } from '$lib/server/queue/fristen';
 
 /**
  * Die Modellstufe der Kategorie-Kaskade: was das Gedaechtnis nicht kennt, wird EINMAL
@@ -23,7 +24,12 @@ import type { ZuOrdnendeZeile } from './kaskade';
 
 export type ModellDeps = {
 	frageModell: (prompt: string) => Promise<{ text: string; usage: ExtractionUsage }>;
+	/** 4.5: Darf noch nachgefragt werden? Fehlt es (Nachlauf, Tests): immer ja. */
+	nachfrageErlaubt?: () => boolean;
 };
+
+/** 4.5 (Sammelfassung 0.11.0): Vermerk, wenn die Nachfrage aus Zeitgruenden entfaellt. */
+export const NACHFRAGE_ENTFALLEN = 'Nachfrage entfallen: zu wenig Restzeit im Auftrag.';
 
 export type ModellErgebnis = {
 	/** Zeilen-Id → Kategorie-Slug, nur geprüfte Slugs. */
@@ -160,6 +166,9 @@ export async function ordneMitNachfrage(zeilen: ZuOrdnendeZeile[], deps: ModellD
 	if (erst.fehler !== null) return erst;
 	const offen = zeilen.filter((z) => !(z.id in erst.vorschlaege));
 	if (offen.length === 0) return erst;
+	// 4.5: Bliebe der Nachfrage nicht ihr volles Zeitlimit, liefe sie ueber das Ende des Auftrags —
+	// dann bleibt es bei der ersten Antwort. Der Vermerk landet im Log des Workers, nicht still.
+	if (deps.nachfrageErlaubt && !deps.nachfrageErlaubt()) return { ...erst, fehler: NACHFRAGE_ENTFALLEN };
 	let zweit: ModellErgebnis;
 	try {
 		zweit = await ordneMitModell(offen, deps);
@@ -178,6 +187,9 @@ export async function ordneMitNachfrage(zeilen: ZuOrdnendeZeile[], deps: ModellD
 	};
 }
 
+/** Hoechstens so lange fragt EIN Kategorienaufruf das Modell (Sammelfassung 0.11.0: benannt, fristen.test.ts rechnet damit). */
+export const KATEGORIEN_ZEITLIMIT_MS = 120_000;
+
 /**
  * Der echte Modellaufruf — an das Modell, das den Bon GERADE GELESEN hat (`ziel`): im Normalfall
  * der MLX-Server auf eigener Hardware, bei einem Ausfall die Cloud-Reserve. Dann geht auch der
@@ -189,10 +201,19 @@ export async function ordneMitNachfrage(zeilen: ZuOrdnendeZeile[], deps: ModellD
  * Modul anfasst, die Umgebungsvariablen.
  */
 export function echteModellDeps(
-	opts: { ziel?: TextModellZiel | null; fetchImpl?: typeof fetch; timeoutMs?: number } = {}
+	opts: {
+		ziel?: TextModellZiel | null;
+		fetchImpl?: typeof fetch;
+		timeoutMs?: number;
+		/** 4.5: Frist und Signal des Auftrags — ohne sie (Nachlauf) gilt nur das eigene Zeitlimit. */
+		auftrag?: { frist: AuftragsFrist; signal?: AbortSignal };
+	} = {}
 ): ModellDeps {
 	const doFetch = opts.fetchImpl ?? opts.ziel?.fetchImpl ?? fetch;
+	const grenze = opts.timeoutMs ?? KATEGORIEN_ZEITLIMIT_MS;
+	const auftrag = opts.auftrag;
 	return {
+		nachfrageErlaubt: () => !auftrag || auftrag.frist.restMs() >= NACHFRAGE_MINDEST_REST_MS,
 		async frageModell(inhalt) {
 			const baseUrl = opts.ziel?.baseUrl ?? process.env.EXTRACTION_BASE_URL;
 			const apiKey = opts.ziel ? opts.ziel.apiKey : process.env.EXTRACTION_API_KEY;
@@ -202,7 +223,7 @@ export function echteModellDeps(
 
 			const antwort = await doFetch(`${baseUrl}/chat/completions`, {
 				method: 'POST',
-				signal: AbortSignal.timeout(opts.timeoutMs ?? 120_000),
+				signal: auftrag ? auftrag.frist.signal(grenze, auftrag.signal) : AbortSignal.timeout(grenze),
 				headers: {
 					'content-type': 'application/json',
 					authorization: `Bearer ${apiKey}`,

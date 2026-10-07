@@ -1,14 +1,18 @@
 <script lang="ts">
 	import { goto, invalidateAll } from '$app/navigation';
+	import { dialog } from '$lib/client/dialog';
+	import { nachKorbFehler } from './rueckfrage';
+	import { tick } from 'svelte';
+	import { mitWartezustand, nachladenAlle, NACHLADEN_MS } from '$lib/client/warten';
 	import { formatCents } from '$lib/money';
 	import { describeProblem, DOPPEL_GRUND, KEIN_BON_CODES, keinBonCode } from '$lib/bons/beanstandungen';
-	import { dochEinBonAnfrage } from '$lib/client/bons/keinBon';
+	import { dochEinBonAnfrage, nachDochEinBon } from '$lib/client/bons/keinBon';
 	import { formatWann } from '$lib/bons/anzeige';
 	import Symbol from '$lib/client/geruest/Symbol.svelte';
 	import { erneutLesen } from '$lib/client/bons/erneutLesen';
-	import { papierkorbAktion } from '$lib/client/bons/papierkorb';
-	import { restTage } from '$lib/bons/papierkorb';
-	import { bildVersion } from '$lib/bons/anzeige';
+	import { papierkorbAktion, nichtEingereiht, NICHT_EINGEREIHT_KORB } from '$lib/client/bons/papierkorb';
+	import { restTage, restTageText } from '$lib/bons/papierkorb';
+	import { bildVersion, wartetAufLesen, leseKnopf } from '$lib/bons/anzeige';
 	import { bildHochladen, originalHolen } from '$lib/client/bons/bild';
 	import BildBearbeiten from '$lib/client/bild/BildBearbeiten.svelte';
 	import Bonbild from './Bonbild.svelte';
@@ -25,6 +29,8 @@
 		positionssumme,
 		pruefeVorBestaetigen,
 		handEingabeBegonnen,
+		kopieSchluessel,
+		selberBon,
 		type EditorZeile
 	} from './editor';
 	import type { OcrZeileKurz } from '$lib/server/ocr/anbieter';
@@ -102,19 +108,38 @@
 	 */
 	let bestaetigt = $derived(data.receipt.status === 'confirmed');
 	let entriegelt = $state(false);
-	/** Als Doppel verworfen: nur noch ansehen und wiederherstellen, nichts bearbeiten. */
-	const verworfen = $derived(data.receipt.status === 'doppelt');
+	/** Als Doppel markiert (2.9): nur ansehen; „Doch kein Doppel" holt ihn zurueck in die Pruefung. */
+	const alsDoppel = $derived(data.receipt.status === 'doppelt');
+	/** Wartet aufs Lesen (2.6): Band, Felder und Knoepfe gesperrt, die Seite laedt nach. */
+	const wartet = $derived(wartetAufLesen(data.receipt.status));
 	/** Im Papierkorb: nur ansehen, zurueckholen oder endgueltig loeschen. */
 	const imPapierkorb = $derived(data.receipt.status === 'verworfen');
 	/** Sieht nicht wie ein Kassenbon aus (ocr/kein-bon.ts) — Band mit Verwerfen / Doch ein Bon. */
-	const keinBon = $derived(imPapierkorb ? null : keinBonCode(data.receipt.needsReviewReason));
+	const keinBon = $derived(imPapierkorb || wartet ? null : keinBonCode(data.receipt.needsReviewReason));
+	/** 2.12: „Erneut lesen" nur ohne Kein-Bon-Hinweis — mit ihm scheiterte es sicher wieder. */
+	const leseWeg = $derived(leseKnopf(data.receipt.status, keinBonCode(data.receipt.needsReviewReason)));
 	/** Das vermutete Original liegt im Papierkorb — der Doppel-Hinweis muss das sagen. */
 	const originalImPapierkorb = $derived(data.original?.status === 'verworfen');
-	const offen = $derived(!verworfen && !imPapierkorb && (!bestaetigt || entriegelt));
+	const offen = $derived(!wartet && !alsDoppel && !imPapierkorb && (!bestaetigt || entriegelt));
 	/** Welche Rueckfrage gerade offen ist — in der Seite, weil confirm() hier nicht taugt. */
 	let rueckfrage = $state<null | 'verwerfen' | 'loeschen' | 'bild'>(null);
+	/** Ein Fehler aus der Rueckfrage steht IN ihr, sie bleibt dann offen (1.6, 1.7). */
+	let rueckfrageFehler = $state('');
+	/** Welcher Knopf der Bild-Rueckfrage gerade arbeitet — fuer „Lädt …" (1.7). */
+	let arbeit = $state<null | 'bild' | 'original'>(null);
+
+	function fragen(art: 'verwerfen' | 'loeschen' | 'bild') {
+		rueckfrage = art;
+		rueckfrageFehler = '';
+	}
+	function rueckfrageSchliessen() {
+		rueckfrage = null;
+		rueckfrageFehler = '';
+	}
 	/** Das Foto im Bearbeiten-Bildschirm (bild/BildBearbeiten.svelte), sonst null. */
 	let bearbeitung = $state<HTMLImageElement | null>(null);
+	/** BildBearbeiten rechnet („Wird vorbereitet …") — sperrt Escape wie das Hochladen (1.7). */
+	let bildRechnet = $state(false);
 	const version = $derived(bildVersion(data.receipt.imagePath));
 	/** Bearbeiten und neu lesen: nur fehlgeschlagene und zu pruefende Bons (Entscheidung 27.09.2026). */
 	const bildBearbeitbar = $derived(
@@ -128,8 +153,12 @@
 	const doppelOffen = $derived(data.receipt.status === 'review' && data.receipt.vermutetesOriginalId !== null);
 
 	$effect(() => {
-		if (angezeigt === data.receipt.id) return;
-		angezeigt = data.receipt.id;
+		const schluessel = kopieSchluessel(data.receipt.id, data.receipt.status);
+		if (angezeigt === schluessel) return;
+		// Review-Fokus 07.10.: Endet das Warten, waehrend am Handy das Vollbild offen ist, bleibt es
+		// offen — dasselbe Foto, jetzt mit Zeilen. Zu geht es nur, wenn ein anderer Bon kommt.
+		if (!selberBon(angezeigt, schluessel)) vollbild = false;
+		angezeigt = schluessel;
 		// Ein fehlgeschlagener Bon hat keine Positionen, bestaetigen braucht aber eine:
 		// die erste leere Zeile steht schon da, damit man gleich lostippen kann.
 		zeilen =
@@ -155,10 +184,18 @@
 		geloescht = [];
 		gewaehlt = null;
 		bildZeile = null;
-		vollbild = false;
 		entriegelt = false;
 		meldung = '';
 	});
+
+	// 2.6: Solange der Bon aufs Lesen wartet, alle 5 s neu laden. Endet das Warten, wechselt
+	// kopieSchluessel, die Kopie kommt aus den neuen Daten, und dieser Effekt raeumt die Uhr weg.
+	$effect(() => {
+		if (!wartet) return;
+		return nachladenAlle(NACHLADEN_MS, invalidateAll);
+	});
+	/** 2.7: Der Wartezustand endet erst, wenn auch das Neuladen bzw. Weiterblaettern fertig ist. */
+	const warte = <T,>(f: () => Promise<T>) => mitWartezustand((an) => (busy = an), f);
 
 	const summe = $derived(positionssumme(zeilen));
 	const differenz = $derived(kopf.totalGrossCents === null ? 0 : summe - kopf.totalGrossCents);
@@ -213,7 +250,6 @@
 
 	/** null: nicht gespeichert (die Meldung steht in `meldung`). */
 	async function senden(bestaetigen: boolean): Promise<{ doppelt: boolean } | null> {
-		busy = true;
 		meldung = '';
 		try {
 			const res = await fetch(`/api/receipts/${data.receipt.id}${bestaetigen ? '/confirm' : ''}`, {
@@ -260,8 +296,6 @@
 		} catch {
 			meldung = 'Keine Verbindung — bitte später noch einmal versuchen.';
 			return null;
-		} finally {
-			busy = false;
 		}
 	}
 
@@ -275,14 +309,16 @@
 	}
 
 	async function spaeter() {
-		// Unberuehrter Fehlschlag: nichts senden. Gespeichert waere er ein Bon in Pruefung,
-		// und „Erneut lesen" gaebe es fuer ihn nicht mehr.
-		if (data.receipt.status === 'failed' && !begonnen) {
+		await warte(async () => {
+			// Unberuehrter Fehlschlag: nichts senden. Gespeichert waere er ein Bon in Pruefung,
+			// und „Erneut lesen" gaebe es fuer ihn nicht mehr.
+			if (data.receipt.status === 'failed' && !begonnen) {
+				await weiter(false);
+				return;
+			}
+			if (!(await senden(false))) return;
 			await weiter(false);
-			return;
-		}
-		if (!(await senden(false))) return;
-		await weiter(false);
+		});
 	}
 
 	/** Korrektur an einem bestaetigten Bon: speichern, Status bleibt, Felder wieder zu. */
@@ -291,9 +327,11 @@
 			meldung = sperren[0];
 			return;
 		}
-		if (!(await senden(false))) return;
-		entriegelt = false;
-		meldung = 'Korrektur gespeichert.';
+		await warte(async () => {
+			if (!(await senden(false))) return;
+			entriegelt = false;
+			meldung = 'Korrektur gespeichert.';
+		});
 	}
 
 	/** Alles zurueck auf den geladenen Stand — ohne Server, ohne Neuladen. */
@@ -304,36 +342,36 @@
 
 	/**
 	 * Die Entscheidung zum Doppel-Hinweis. Ungespeicherte Korrekturen gehen dabei NICHT
-	 * mit: „doppelt" verwirft den Bon ohnehin, und nach den beiden anderen laedt die Seite
+	 * mit: „doppelt" markiert den Bon ohnehin als Doppel, und nach den beiden anderen laedt die Seite
 	 * neu. Wer schon korrigiert hat, entscheidet besser zuerst.
 	 */
 	async function doppelEntscheiden(entscheidung: 'doppelt' | 'eigenerEinkauf' | 'wiederherstellen') {
-		busy = true;
-		meldung = '';
-		try {
-			const res = await fetch(`/api/receipts/${data.receipt.id}/doppelt`, {
-				method: 'POST',
-				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ entscheidung })
-			});
-			if (!res.ok) {
-				const j = (await res.json().catch(() => null)) as { message?: string } | null;
-				meldung = j?.message ?? `Entscheidung fehlgeschlagen (HTTP ${res.status}).`;
+		await warte(async () => {
+			meldung = '';
+			try {
+				const res = await fetch(`/api/receipts/${data.receipt.id}/doppelt`, {
+					method: 'POST',
+					headers: { 'content-type': 'application/json' },
+					body: JSON.stringify({ entscheidung })
+				});
+				if (!res.ok) {
+					const j = (await res.json().catch(() => null)) as { message?: string } | null;
+					meldung = j?.message ?? `Entscheidung fehlgeschlagen (HTTP ${res.status}).`;
+					return;
+				}
+			} catch {
+				meldung = 'Keine Verbindung — bitte später noch einmal versuchen.';
 				return;
 			}
-		} catch {
-			meldung = 'Keine Verbindung — bitte später noch einmal versuchen.';
-			return;
-		} finally {
-			busy = false;
-		}
-		if (entscheidung === 'doppelt') {
-			await weiter(true);
-			return;
-		}
-		// Neu laden UND die eigene Kopie verwerfen: sonst stuende der alte Stand weiter da.
-		angezeigt = '';
-		await invalidateAll();
+			if (entscheidung === 'doppelt') {
+				await weiter(true);
+				return;
+			}
+			// Neu laden UND die eigene Kopie verwerfen: sonst stuende der alte Stand weiter da.
+			// Erst laden, dann zuruecksetzen — sonst baute der Effekt die Kopie aus den alten Daten.
+			await invalidateAll();
+			angezeigt = '';
+		});
 	}
 
 	/**
@@ -343,15 +381,15 @@
 	 */
 	async function nochmalLesen() {
 		if (begonnen && !confirm('Was du schon eingetragen hast, geht dabei verloren. Trotzdem neu lesen?')) return;
-		busy = true;
-		meldung = '';
-		const ergebnis = await erneutLesen(data.receipt.id);
-		busy = false;
-		if (!ergebnis.ok) {
-			meldung = ergebnis.meldung;
-			return;
-		}
-		await goto('/inbox');
+		await warte(async () => {
+			meldung = '';
+			const ergebnis = await erneutLesen(data.receipt.id);
+			if (!ergebnis.ok) {
+				meldung = ergebnis.meldung;
+				return;
+			}
+			await goto('/inbox');
+		});
 	}
 
 	/**
@@ -359,23 +397,38 @@
 	 * aus dem Stapel —, Loeschen in den Papierkorb der Bonliste, Zurueckholen laedt neu.
 	 */
 	async function papierkorb(aktion: 'verwerfen' | 'wiederherstellen' | 'loeschen') {
-		busy = true;
-		meldung = '';
-		const r = await papierkorbAktion(
-			data.receipt.id,
-			aktion,
-			aktion === 'verwerfen' ? { bestaetigtWegnehmen: bestaetigt } : {}
-		);
-		busy = false;
-		rueckfrage = null;
-		if (!r.ok) {
-			meldung = r.meldung;
-			return;
-		}
-		if (aktion === 'verwerfen') return weiter(true);
-		if (aktion === 'loeschen') return goto('/receipts?status=papierkorb');
-		angezeigt = '';
-		await invalidateAll();
+		await warte(async () => {
+			meldung = '';
+			rueckfrageFehler = '';
+			const r = await papierkorbAktion(
+				data.receipt.id,
+				aktion,
+				aktion === 'verwerfen' ? { bestaetigtWegnehmen: bestaetigt } : {}
+			);
+			if (!r.ok) {
+				// Aus der Rueckfrage heraus steht der Fehler IN ihr, sie bleibt offen (1.6); bei
+				// brauchtRueckfrage neu laden, damit der naechste Klick bestaetigtWegnehmen schickt (2.3).
+				const f = nachKorbFehler(r, rueckfrage !== null);
+				rueckfrageFehler = f.rueckfrageFehler;
+				meldung = f.meldung;
+				if (f.neuLaden) {
+					await invalidateAll();
+					// Abschlusspruefung 0.11.0: kopieSchluessel ist fuer review und confirmed gleich — ohne
+					// das blieben Kopf und Zeilen auf dem alten Stand, und Speichern ueberschriebe die
+					// Korrekturen aus dem anderen Tab. Rueckfrage und rueckfrageFehler bleiben stehen.
+					angezeigt = '';
+				}
+				return;
+			}
+			rueckfrage = null;
+			if (aktion === 'verwerfen') return weiter(true);
+			if (aktion === 'loeschen') return goto('/receipts?status=papierkorb');
+			await invalidateAll();
+			// Der Status wechselt, mit ihm kopieSchluessel; der Effekt baut die Kopie neu und leert
+			// dabei `meldung` — die Meldung (2.11) deshalb erst nach tick().
+			await tick();
+			if (nichtEingereiht(r)) meldung = NICHT_EINGEREIHT_KORB;
+		});
 	}
 
 	/**
@@ -385,58 +438,87 @@
 	async function dochEinBon() {
 		// Wie „Erneut lesen": wer schon eingetragen hat, wird gefragt, bevor das verloren geht.
 		if (data.receipt.status === 'failed' && begonnen && !confirm('Was du schon eingetragen hast, geht dabei verloren. Trotzdem neu lesen?')) return;
-		busy = true;
-		meldung = '';
-		const r = await dochEinBonAnfrage(data.receipt.id);
-		busy = false;
-		if (!r.ok) {
-			meldung = r.meldung;
-			return;
-		}
-		if (data.receipt.status === 'failed') return goto('/inbox');
-		// Nur neu laden, NICHT angezeigt zuruecksetzen: sonst waeren Korrekturen, die schon im
-		// Feld stehen, weg (Pruefung 27.09.2026). Der Hinweis kommt aus data.receipt.
-		await invalidateAll();
+		const vorher = data.receipt.status;
+		await warte(async () => {
+			meldung = '';
+			const r = await dochEinBonAnfrage(data.receipt.id);
+			const f = nachDochEinBon(vorher, r);
+			if (f.liest) return goto('/inbox');
+			// Nur neu laden, NICHT angezeigt zuruecksetzen: sonst waeren Korrekturen, die schon im
+			// Feld stehen, weg (Pruefung 27.09.2026). Der Hinweis kommt aus data.receipt; beim
+			// Rueckfall auf „fehlgeschlagen" steht er wieder da (2.11).
+			if (r.ok) await invalidateAll();
+			if (f.meldung) meldung = f.meldung;
+		});
 	}
 
-	/** Nach der Rueckfrage: das Foto laden und den Bearbeiten-Bildschirm oeffnen. */
+	/**
+	 * Aus der Rueckfrage: das Foto laden und den Bearbeiten-Bildschirm oeffnen. Die Rueckfrage
+	 * bleibt dabei offen („Lädt …") und schliesst erst nach Erfolg; ein Fehler steht in ihr (1.7).
+	 */
 	async function bildOeffnen() {
-		rueckfrage = null;
 		meldung = '';
-		const i = new Image();
-		i.src = `/receipts/${data.receipt.id}/image?v=${version}`;
-		try {
-			await i.decode();
-			bearbeitung = i;
-		} catch {
-			meldung = 'Das Bild ließ sich nicht laden.';
-		}
+		rueckfrageFehler = '';
+		const bild = await warte(async () => {
+			arbeit = 'bild';
+			const i = new Image();
+			i.src = `/receipts/${data.receipt.id}/image?v=${version}`;
+			try {
+				await i.decode();
+				return i;
+			} catch {
+				rueckfrageFehler = 'Das Bild ließ sich nicht laden.';
+				return null;
+			} finally {
+				arbeit = null;
+			}
+		});
+		if (!bild) return;
+		// `warte` ist durch, busy wieder false. Erst die Rueckfrage schliessen — ihr Abbau gibt den
+		// Fokus an „Bild bearbeiten" zurueck, der dafuer frei sein muss —, dann die Ueberlagerung
+		// oeffnen: die merkt sich genau diesen Knopf als Rueckweg.
+		rueckfrage = null;
+		await tick();
+		bearbeitung = bild;
+	}
+
+	/** Abbrechen in der Ueberlagerung (Knopf oder Escape): verwirft die Bearbeitung. */
+	function bildAbbrechen() {
+		bearbeitung = null;
+		meldung = '';
 	}
 
 	async function bildUebernehmen(blob: Blob) {
-		busy = true;
-		meldung = '';
-		const r = await bildHochladen(data.receipt.id, blob);
-		busy = false;
-		if (!r.ok) {
-			meldung = r.meldung;
-			return;
-		}
-		bearbeitung = null;
-		await goto('/inbox');
+		await warte(async () => {
+			meldung = '';
+			const r = await bildHochladen(data.receipt.id, blob);
+			if (!r.ok) {
+				meldung = r.meldung;
+				return;
+			}
+			bearbeitung = null;
+			await goto('/inbox');
+		});
 	}
 
 	async function originalZurueck() {
-		rueckfrage = null;
-		busy = true;
 		meldung = '';
-		const r = await originalHolen(data.receipt.id);
-		busy = false;
-		if (!r.ok) {
-			meldung = r.meldung;
-			return;
-		}
-		await goto('/inbox');
+		rueckfrageFehler = '';
+		await warte(async () => {
+			arbeit = 'original';
+			try {
+				const r = await originalHolen(data.receipt.id);
+				if (!r.ok) {
+					// Im Dialog, der bleibt offen — vorher erschien der Fehler erst nach dem Schliessen (1.7).
+					rueckfrageFehler = r.meldung;
+					return;
+				}
+				rueckfrage = null;
+				await goto('/inbox');
+			} finally {
+				arbeit = null;
+			}
+		});
 	}
 
 	async function bestaetigen() {
@@ -448,15 +530,18 @@
 			meldung = sperren[0];
 			return;
 		}
-		const ergebnis = await senden(true);
-		if (!ergebnis) return;
-		if (ergebnis.doppelt) {
-			// Nicht weiter: neu laden, dann steht hier das Doppel-Band mit dem Original.
-			angezeigt = '';
-			await invalidateAll();
-			return;
-		}
-		await weiter(true);
+		await warte(async () => {
+			const ergebnis = await senden(true);
+			if (!ergebnis) return;
+			if (ergebnis.doppelt) {
+				// Nicht weiter: neu laden, dann steht hier das Doppel-Band mit dem Original. Erst
+				// laden, dann zuruecksetzen — sonst baute der Effekt die Kopie aus den alten Daten.
+				await invalidateAll();
+				angezeigt = '';
+				return;
+			}
+			await weiter(true);
+		});
 	}
 </script>
 
@@ -476,7 +561,7 @@
 					type="button"
 					class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold text-rot-dunkel disabled:opacity-60"
 					disabled={busy}
-					onclick={() => (rueckfrage = 'loeschen')}>Jetzt löschen</button
+					onclick={() => fragen('loeschen')}>Jetzt löschen</button
 				>
 				<button
 					type="button"
@@ -485,14 +570,8 @@
 					onclick={() => papierkorb('wiederherstellen')}>Wiederherstellen</button
 				>
 			{/if}
-		{:else if verworfen}
-			<span class="mr-auto text-[12.5px] font-semibold text-gedaempft lg:mr-0">Als doppelt verworfen</span>
-			<button
-				type="button"
-				class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold"
-				disabled={busy}
-				onclick={() => doppelEntscheiden('wiederherstellen')}>Wiederherstellen</button
-			>
+		{:else if alsDoppel}
+			<span class="mr-auto text-[12.5px] font-semibold text-gedaempft lg:mr-0">Als Doppel markiert</span>
 		{:else if bestaetigt && !entriegelt}
 			<span class="mr-auto text-[12.5px] font-semibold text-gedaempft lg:mr-0">Bestätigt</span>
 			<button
@@ -544,7 +623,7 @@
 			<input
 				type="checkbox"
 				bind:checked={kopf.privatBehalten}
-				disabled={busy}
+				disabled={busy || wartet}
 				class="mt-0.5 h-4 w-4 shrink-0 accent-tuerkis"
 			/>
 			<span class="min-w-0 text-[13px] leading-tight">
@@ -556,17 +635,17 @@
 		</label>
 			<button
 				type="button"
-				class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold"
-				disabled={busy}
+				class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold disabled:opacity-60"
+				disabled={busy || wartet}
 				onclick={spaeter}>Später</button
 			>
 			<button
 				type="button"
 				class="flex-1 rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60 lg:flex-none"
-				disabled={busy}
+				disabled={busy || wartet}
 				onclick={bestaetigen}
 			>
-				{busy ? 'Speichert …' : 'Bestätigen'}
+				{wartet ? 'Wird gelesen …' : busy ? 'Speichert …' : 'Bestätigen'}
 			</button>
 		{/if}
 	</div>
@@ -616,15 +695,15 @@
 				type="button"
 				class="shrink-0 rounded-xl border border-linie bg-papier px-3 py-1.5 text-[13px] font-bold disabled:opacity-60"
 				disabled={busy}
-				onclick={() => (rueckfrage = 'bild')}><span class="hidden sm:inline">Bild bearbeiten</span><span class="sm:hidden">Bild</span></button
+				onclick={() => fragen('bild')}><span class="hidden sm:inline">Bild bearbeiten</span><span class="sm:hidden">Bild</span></button
 			>
 		{/if}
 		{#if data.darfVerwerfen && !imPapierkorb}
 			<button
 				type="button"
 				class="shrink-0 rounded-xl border border-linie bg-papier px-3 py-1.5 text-[13px] font-bold text-rot-dunkel disabled:opacity-60"
-				disabled={busy}
-				onclick={() => (rueckfrage = 'verwerfen')}>Verwerfen</button
+				disabled={busy || wartet}
+				onclick={() => fragen('verwerfen')}>Verwerfen</button
 			>
 		{/if}
 		{@render aktionen('hidden lg:flex')}
@@ -659,12 +738,31 @@
 		<main
 			class="grid gap-3.5 px-4 py-4 pb-28 lg:min-h-0 lg:content-start lg:overflow-y-auto lg:px-6 lg:pb-4"
 		>
-			<!-- `display: contents`, damit das fieldset nichts am Aufbau aendert — es dient
-			     allein dazu, ALLE Felder darin auf einmal zu sperren. -->
+			{#if wartet}
+				<div role="status" class="rounded-xl border border-linie bg-chip px-3.5 py-3 text-[13px] font-semibold text-gedaempft">
+					Wird gerade gelesen … Felder und Knöpfe sind so lange gesperrt; die Seite zeigt den Bon von selbst, sobald er
+					gelesen ist.
+				</div>
+			{/if}
+
 			{#if imPapierkorb && data.receipt.verworfenAm}
 				<div class="rounded-xl border border-linie bg-chip px-3.5 py-3 text-[13px] font-semibold text-gedaempft">
-					Im Papierkorb. Wird in {restTage(data.receipt.verworfenAm, new Date())} Tagen endgültig gelöscht, wenn du
-					ihn nicht wiederherstellst.
+					Im Papierkorb — {restTageText(restTage(data.receipt.verworfenAm, new Date()))}. Bis dahin lässt er sich wiederherstellen.
+				</div>
+			{/if}
+
+			{#if alsDoppel}
+				<!-- 2.9: „Verwerfen" heisst nur noch Papierkorb. Der Doppel bekommt sein eigenes Band. -->
+				<div class="grid gap-2.5 rounded-xl border border-linie bg-chip px-3.5 py-3 text-[13px]">
+					<p class="font-semibold text-gedaempft">Als Doppel markiert — zählt in keinem Bericht und keinem Budget.</p>
+					<div class="flex flex-wrap gap-2">
+						<button
+							type="button"
+							class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold disabled:opacity-60"
+							disabled={busy}
+							onclick={() => doppelEntscheiden('wiederherstellen')}>Doch kein Doppel</button
+						>
+					</div>
 				</div>
 			{/if}
 
@@ -677,7 +775,7 @@
 								type="button"
 								class="rounded-xl bg-bernstein px-3.5 py-2 text-sm font-extrabold text-white disabled:opacity-60"
 								disabled={busy}
-								onclick={() => (rueckfrage = 'verwerfen')}>Verwerfen</button
+								onclick={() => fragen('verwerfen')}>Verwerfen</button
 							>
 						{/if}
 						<!-- Bei „kaum Text" gibt es fuer das Modell nichts zu lesen — es wuerde einen Bon
@@ -702,18 +800,26 @@
 						<b class="block font-extrabold">Auslesen fehlgeschlagen{data.receipt.failureReason ? ':' : '.'}</b>
 						{#if data.receipt.failureReason}<span class="block">{data.receipt.failureReason}</span>{/if}
 						<span class="mt-1 block font-semibold">
-							Trag den Bon von Hand ein — Händler, Datum, Endsumme und mindestens eine Position — oder lass ihn
-							noch einmal lesen.
+							{#if leseWeg === 'erneut'}
+								Trag den Bon von Hand ein — Händler, Datum, Endsumme und mindestens eine Position — oder lass ihn
+								noch einmal lesen.
+							{:else}
+								Trag den Bon von Hand ein — Händler, Datum, Endsumme und mindestens eine Position.
+							{/if}
 						</span>
 					</p>
-					<div class="flex flex-wrap gap-2">
-						<button
-							type="button"
-							class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold text-tinte disabled:opacity-60"
-							disabled={busy}
-							onclick={nochmalLesen}>Erneut lesen</button
-						>
-					</div>
+					<!-- 2.12: Mit Kein-Bon-Hinweis scheiterte „Erneut lesen" sicher wieder an derselben
+					     Vorpruefung — dann bietet das Band darueber „Doch ein Bon, lesen". -->
+					{#if leseWeg === 'erneut'}
+						<div class="flex flex-wrap gap-2">
+							<button
+								type="button"
+								class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold text-tinte disabled:opacity-60"
+								disabled={busy}
+								onclick={nochmalLesen}>Erneut lesen</button
+							>
+						</div>
+					{/if}
 				</div>
 			{/if}
 
@@ -749,7 +855,7 @@
 							class:bg-papier={originalImPapierkorb}
 							class:font-bold={originalImPapierkorb}
 							disabled={busy}
-							onclick={() => doppelEntscheiden('doppelt')}>Ist doppelt – verwerfen</button
+							onclick={() => doppelEntscheiden('doppelt')}>Ist doppelt – nicht zählen</button
 						>
 						<button
 							type="button"
@@ -768,6 +874,8 @@
 				</div>
 			{/if}
 
+			<!-- `display: contents`, damit das fieldset nichts am Aufbau aendert — es dient
+			     allein dazu, ALLE Felder darin auf einmal zu sperren. -->
 			<fieldset disabled={!offen} class="contents">
 				<Kopfdaten
 					bind:merchantNameRaw={kopf.merchantNameRaw}
@@ -867,6 +975,7 @@
 		role="dialog"
 		aria-modal="true"
 		aria-labelledby="rueckfrage-titel"
+		use:dialog={{ onschliessen: rueckfrageSchliessen, gesperrt: busy }}
 	>
 		<div class="grid w-full max-w-sm gap-3 rounded-2xl bg-papier p-5 text-[14px]">
 			<b id="rueckfrage-titel" class="text-[16px] font-extrabold">
@@ -890,11 +999,15 @@
 					30 Tage lang kannst du ihn wiederherstellen, danach wird er gelöscht.
 				{/if}
 			</p>
+			{#if rueckfrageFehler}<p role="alert" class="text-sm font-semibold text-rot-dunkel">{rueckfrageFehler}</p>{/if}
 			<div class="flex flex-wrap justify-end gap-2">
+				<!-- Fokus beim Oeffnen hierher (1.6); waehrend der Arbeit gesperrt, wie Escape. -->
 				<button
 					type="button"
-					class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold"
-					onclick={() => (rueckfrage = null)}>Abbrechen</button
+					class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold disabled:opacity-60"
+					data-autofocus
+					disabled={busy}
+					onclick={rueckfrageSchliessen}>Abbrechen</button
 				>
 				{#if rueckfrage === 'bild'}
 					{#if data.receipt.originalImagePath}
@@ -902,14 +1015,14 @@
 							type="button"
 							class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold disabled:opacity-60"
 							disabled={busy}
-							onclick={originalZurueck}>Original wiederherstellen</button
+							onclick={originalZurueck}>{arbeit === 'original' ? 'Wird zurückgeholt …' : 'Original wiederherstellen'}</button
 						>
 					{/if}
 					<button
 						type="button"
 						class="rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
 						disabled={busy}
-						onclick={bildOeffnen}>Bild bearbeiten</button
+						onclick={bildOeffnen}>{arbeit === 'bild' ? 'Lädt …' : 'Bild bearbeiten'}</button
 					>
 				{:else}
 				<button
@@ -926,18 +1039,26 @@
 	</div>
 {/if}
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && rueckfrage !== null && (rueckfrage = null)} />
 
 {#if bearbeitung}
 	<!-- Bild bearbeiten (bons/bild.ts): derselbe Bildschirm wie beim Scannen. -->
-	<div class="fixed inset-0 z-50 overflow-y-auto bg-flaeche px-4 py-4" role="dialog" aria-modal="true" aria-label="Bild bearbeiten">
+	<!-- Escape = Abbrechen, gesperrt waehrend Vorbereiten und Hochladen; Fokus auf den
+	     Hauptknopf und danach zurueck auf „Bild bearbeiten" (1.7). -->
+	<div
+		class="fixed inset-0 z-50 overflow-y-auto bg-flaeche px-4 py-4"
+		role="dialog"
+		aria-modal="true"
+		aria-label="Bild bearbeiten"
+		use:dialog={{ onschliessen: bildAbbrechen, gesperrt: busy || bildRechnet }}
+	>
 		<div class="mx-auto grid max-w-xl gap-3">
 			<BildBearbeiten
 				bild={bearbeitung}
 				hauptText={busy ? 'Wird hochgeladen …' : 'Übernehmen und neu lesen'}
 				beschaeftigt={busy}
 				onfertig={bildUebernehmen}
-				onabbrechen={() => (bearbeitung = null)}
+				bind:rechnet={bildRechnet}
+				onabbrechen={bildAbbrechen}
 			/>
 			{#if meldung}<p class="text-sm font-semibold text-rot-dunkel">{meldung}</p>{/if}
 		</div>

@@ -38,6 +38,17 @@ describe('merkmalText', () => {
 	it('faellt ohne Namen nicht aus', () => {
 		expect(merkmalText({ ...f, laden: ['l9'] }, 'laden', LEERE_NAMEN)).toBe('Laden: unbekannter Laden');
 	});
+
+	// Sammelfassung 3.10: fuer die Matrix-Nachricht, wenn der volle Text zu lang waere.
+	it('kuerzt lange Listen auf die ersten Namen und „N weitere"', () => {
+		const viele = { ...NAMEN, laden: { l1: 'A', l2: 'B', l3: 'C', l4: 'D', l5: 'E' } };
+		const g = { ...f, laden: ['l1', 'l2', 'l3', 'l4', 'l5'] };
+		expect(merkmalText(g, 'laden', viele, 3)).toBe('Laden: A, B, C und 2 weitere');
+		expect(merkmalText(g, 'laden', viele)).toBe('Laden: A, B, C, D, E');
+		// „und 1 weitere" spart nichts — dann alle.
+		expect(merkmalText({ ...f, laden: ['l1', 'l2', 'l3', 'l4'] }, 'laden', viele, 3)).toBe('Laden: A, B, C, D');
+		expect(filterZusammenfassung({ ...g, suche: 'Kaffee' }, viele, 3)).toEqual(['Laden: A, B, C und 2 weitere', 'Suche: „Kaffee"']);
+	});
 });
 
 describe('filterZusammenfassung', () => {

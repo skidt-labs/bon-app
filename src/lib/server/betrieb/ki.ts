@@ -8,7 +8,7 @@ import { bildwegIstBestaetigt, konfigAusEnv, type KiWeg } from '$lib/server/extr
 import { leseReserveZustand, verbrauchImMonat, type Verbrauch } from '$lib/server/ki/reserve';
 import { entschluesseln, geheimnisVorhanden, schluesselEnde, SchluesselFehlt, verschluesseln } from '$lib/server/ki/geheimnis';
 import { BildwegNichtFreigegeben } from '$lib/server/ki/fehler';
-import { protokolliere } from './protokoll';
+import { protokolliere, type Schreiber } from './protokoll';
 
 /**
  * Die KI-Anbieter der Instanz verwalten.
@@ -132,20 +132,20 @@ export type AnbieterKarte = {
 	reserveGrund: string | null;
 };
 
-export async function kiStandLesen(): Promise<{ aktivId: string | null; stand: number }> {
-	const [z] = await db
+export async function kiStandLesen(d: Verbindung = db): Promise<{ aktivId: string | null; stand: number }> {
+	const [z] = await d
 		.select({ aktivId: instanz.aktiverKiAnbieter, stand: instanz.kiStand })
 		.from(instanz)
 		.where(eq(instanz.id, 1));
 	return { aktivId: z?.aktivId ?? null, stand: z?.stand ?? 0 };
 }
 
-export async function anbieterListe(env: NodeJS.ProcessEnv = process.env): Promise<AnbieterKarte[]> {
-	const { aktivId } = await kiStandLesen();
+export async function anbieterListe(env: NodeJS.ProcessEnv = process.env, d: Verbindung = db): Promise<AnbieterKarte[]> {
+	const { aktivId } = await kiStandLesen(d);
 	const [zeilen, { reserveId }, haupt] = await Promise.all([
-		db.select().from(kiAnbieter).orderBy(kiAnbieter.angelegtAm),
-		leseReserveZustand(),
-		hauptWeg(env)
+		d.select().from(kiAnbieter).orderBy(kiAnbieter.angelegtAm),
+		leseReserveZustand(d),
+		hauptWeg(env, d)
 	]);
 	// Die Karte wird FELD FUER FELD gebaut, nicht per Spread: so kann `schluesselEnc`
 	// nicht versehentlich mitwandern, wenn die Tabelle eine Spalte dazubekommt.
@@ -199,13 +199,18 @@ const BILDWEG_GESPERRT = 'Der Bildweg ist in der .env nicht freigegeben.';
  * Wirft SchluesselFehlt, wenn ein Schluessel eingegeben wurde, SECRETS_KEY aber fehlt, und
  * BildwegNichtFreigegeben fuer einen neuen Bildweg-Anbieter ohne Freigabe in der .env.
  */
-export async function anbieterAnlegen(e: AnbieterEingabe, userId: string, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+export async function anbieterAnlegen(
+	e: AnbieterEingabe,
+	userId: string,
+	env: NodeJS.ProcessEnv = process.env,
+	d: Verbindung = db
+): Promise<string> {
 	if (e.weg === 'bild' && !bildwegIstBestaetigt(env)) throw new BildwegNichtFreigegeben(BILDWEG_GESPERRT);
 	const id = randomUUID();
 	const schluessel = e.schluessel
 		? { schluesselEnc: verschluesseln(e.schluessel, id, env), schluesselEnde: schluesselEnde(e.schluessel) }
 		: { schluesselEnc: null, schluesselEnde: null };
-	await db.transaction(async (tx) => {
+	await d.transaction(async (tx) => {
 		await tx.insert(kiAnbieter).values({ id, ...felder(e), ...schluessel });
 		await protokolliere(tx, { userId, aktion: 'ki.angelegt', ziel: e.name, details: { anbieterId: id, weg: e.weg, modell: e.modell } });
 	});
@@ -264,6 +269,22 @@ export async function anbieterAendern(
 	});
 }
 
+/**
+ * 4.6 (Sammelfassung 0.11.0): Ein Wechsel des Hauptanbieters beendet ein stehengebliebenes
+ * „Reserve liest seit …" — der neue Hauptanbieter wird beim naechsten Bon zuerst gefragt.
+ * Nur Protokoll, keine Matrix-Meldung: das ist eine Handlung auf der Seite, kein Ausfall.
+ * Aktion und Form wie reserveZurueck in ki/reserve.ts, aber mit der Nutzer-Id.
+ */
+async function reserveZustandBeendet(tx: Schreiber, userId: string, seit: Date | null, anlass: string): Promise<void> {
+	if (!seit) return;
+	await protokolliere(tx, {
+		userId,
+		aktion: 'ki.reserve_zurueck',
+		ziel: 'Hauptanbieter',
+		details: { anlass, seit: seit.toISOString() }
+	});
+}
+
 export async function anbieterAktivieren(id: string, userId: string, env: NodeJS.ProcessEnv = process.env, d: Verbindung = db): Promise<void> {
 	await d.transaction(async (tx) => {
 		const [z] = await tx
@@ -276,7 +297,7 @@ export async function anbieterAktivieren(id: string, userId: string, env: NodeJS
 			throw new BildwegNichtFreigegeben(BILDWEG_GESPERRT);
 		}
 		const [alt] = await tx
-			.select({ aktivId: instanz.aktiverKiAnbieter, reserveId: instanz.reserveKiAnbieter })
+			.select({ aktivId: instanz.aktiverKiAnbieter, reserveId: instanz.reserveKiAnbieter, reserveAktivSeit: instanz.reserveAktivSeit })
 			.from(instanz)
 			.where(eq(instanz.id, 1));
 		// Die Reserve zum Hauptanbieter zu machen, liesse sie beides zugleich sein — jeder Bon
@@ -287,7 +308,7 @@ export async function anbieterAktivieren(id: string, userId: string, env: NodeJS
 			.values({ id: 1, aktiverKiAnbieter: id, kiStand: 1 })
 			.onConflictDoUpdate({
 				target: instanz.id,
-				set: { aktiverKiAnbieter: id, kiStand: sql`${instanz.kiStand} + 1`, geaendertAm: new Date() }
+				set: { aktiverKiAnbieter: id, kiStand: sql`${instanz.kiStand} + 1`, geaendertAm: new Date(), reserveAktivSeit: null }
 			});
 		await protokolliere(tx, {
 			userId,
@@ -295,20 +316,25 @@ export async function anbieterAktivieren(id: string, userId: string, env: NodeJS
 			ziel: z.name,
 			details: { alt: alt?.aktivId ?? null, neu: id }
 		});
+		await reserveZustandBeendet(tx, userId, alt?.reserveAktivSeit ?? null, 'Anbieter aktiviert');
 	});
 }
 
-export async function zurueckAufEnv(userId: string): Promise<void> {
-	await db.transaction(async (tx) => {
-		const [alt] = await tx.select({ aktivId: instanz.aktiverKiAnbieter }).from(instanz).where(eq(instanz.id, 1));
+export async function zurueckAufEnv(userId: string, d: Verbindung = db): Promise<void> {
+	await d.transaction(async (tx) => {
+		const [alt] = await tx
+			.select({ aktivId: instanz.aktiverKiAnbieter, reserveAktivSeit: instanz.reserveAktivSeit })
+			.from(instanz)
+			.where(eq(instanz.id, 1));
 		await tx
 			.insert(instanz)
 			.values({ id: 1, aktiverKiAnbieter: null, kiStand: 1 })
 			.onConflictDoUpdate({
 				target: instanz.id,
-				set: { aktiverKiAnbieter: null, kiStand: sql`${instanz.kiStand} + 1`, geaendertAm: new Date() }
+				set: { aktiverKiAnbieter: null, kiStand: sql`${instanz.kiStand} + 1`, geaendertAm: new Date(), reserveAktivSeit: null }
 			});
 		await protokolliere(tx, { userId, aktion: 'ki.zurueck_auf_env', ziel: '.env', details: { alt: alt?.aktivId ?? null } });
+		await reserveZustandBeendet(tx, userId, alt?.reserveAktivSeit ?? null, 'Zurück auf .env');
 	});
 }
 
@@ -338,9 +364,10 @@ export async function testErgebnisSpeichern(
 	ok: boolean,
 	text: string,
 	userId: string,
-	stand: string
+	stand: string,
+	d: Verbindung = db
 ): Promise<boolean> {
-	return db.transaction(async (tx) => {
+	return d.transaction(async (tx) => {
 		const [z] = await tx
 			.update(kiAnbieter)
 			.set({ testOk: ok, testErgebnis: text, zuletztGetestet: new Date() })

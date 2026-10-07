@@ -79,4 +79,19 @@ describe('Papierkorb-Endpunkte', () => {
 		await wiederherstellen(ereignis());
 		expect(mocks.holen).toHaveBeenCalledWith(expect.anything(), expect.anything(), 'r1');
 	});
+
+	// 2.3: die Bonliste erkennt an der Kennung, dass sie nachfragen soll.
+	it('antwortet beim bestaetigten Bon mit 409 und der Kennung brauchtRueckfrage', async () => {
+		mocks.ergebnis = { ok: false, status: 409, meldung: 'Dieser Bon ist bestätigt …', brauchtRueckfrage: true };
+		const antwort = (await verwerfen(ereignis('{}'))) as Response;
+		expect(antwort.status).toBe(409);
+		expect(await antwort.json()).toEqual({ message: 'Dieser Bon ist bestätigt …', brauchtRueckfrage: true });
+	});
+
+	// 2.11: „Aus dem Papierkorb holen" sagt, ob der Bon wirklich neu gelesen wird.
+	it('reicht beim Wiederherstellen eingereiht und den Zielstatus durch', async () => {
+		mocks.ergebnis = { ok: true, eingereiht: false, status: 'pending' };
+		const antwort = (await wiederherstellen(ereignis())) as Response;
+		expect(await antwort.json()).toEqual({ ok: true, eingereiht: false, status: 'pending' });
+	});
 });

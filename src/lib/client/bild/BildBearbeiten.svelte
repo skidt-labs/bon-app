@@ -5,19 +5,23 @@
 	 * Uebernehmen wird ECHT entzerrt. Scannen und Pruefansicht benutzen denselben Bildschirm.
 	 */
 	import { tick } from 'svelte';
-	import { defaultQuad, clampQuad, type Quad } from '$lib/client/crop';
-	import { gedrehtZeichnen, erkenne, ausschneiden } from './leinwand';
+	import { defaultQuad, clampQuad, zugErlaubt, type Quad } from '$lib/client/crop';
+	import { gedrehtZeichnen, erkenne, ausschneiden, ausschnittLeinwand } from './leinwand';
+	import { randHinweis, type Rand } from './rand';
 
 	let {
 		bild,
 		hauptText,
 		beschaeftigt = false,
+		rechnet = $bindable(false),
 		onfertig,
 		onabbrechen
 	}: {
 		bild: HTMLImageElement;
 		hauptText: string;
 		beschaeftigt?: boolean;
+		/** „Wird vorbereitet …" — bindbar: die Pruefansicht sperrt damit Escape (1.7). */
+		rechnet?: boolean;
 		onfertig: (blob: Blob) => void | Promise<void>;
 		onabbrechen: () => void;
 	} = $props();
@@ -28,11 +32,15 @@
 	/** Was der Regler gerade zeigt; gezeichnet wird erst beim Loslassen (3000-px-Bild). */
 	let feinAnzeige = $state(0);
 	let quad = $state<Quad | null>(null);
-	let erkannt = $state(false);
+	/** Woher das Viereck stammt (2.14e): erkannt, unsicher oder von Hand gezogen. */
+	let rand = $state<Rand>('unsicher');
+	const hinweis = $derived(randHinweis(rand));
 	let masse = $state({ breite: 1, hoehe: 1 });
-	let rechnet = $state(false);
 	let fehler = $state('');
 	let gezogen = $state<number | null>(null);
+	// Feinregler: so weit dreht CSS das gezeichnete Bild, bis losgelassen wird — beide drehen im
+	// Uhrzeigersinn positiv (ctx.rotate wie CSS rotate). 2.14d: Vorschau beim Ziehen.
+	const vorschauGrad = $derived(feinAnzeige - fein);
 
 	$effect(() => {
 		const c = leinwand;
@@ -43,7 +51,7 @@
 		gedrehtZeichnen(c, b, v, f);
 		masse = { breite: c.width, hoehe: c.height };
 		const treffer = erkenne(c);
-		erkannt = treffer !== null;
+		rand = treffer ? 'erkannt' : 'unsicher';
 		quad = treffer ?? defaultQuad(c.width, c.height);
 	});
 
@@ -56,7 +64,7 @@
 		feinAnzeige = 0;
 		if (leinwand) {
 			const treffer = erkenne(leinwand);
-			erkannt = treffer !== null;
+			rand = treffer ? 'erkannt' : 'unsicher';
 			quad = treffer ?? defaultQuad(leinwand.width, leinwand.height);
 		}
 	}
@@ -74,8 +82,11 @@
 		}
 		const neu = [...quad] as Quad;
 		neu[i] = p;
-		quad = clampQuad(neu, masse.breite, masse.hoehe);
-		erkannt = false;
+		const geklemmt = clampQuad(neu, masse.breite, masse.hoehe);
+		// 2.14c: ueber Kreuz gezogene Ecken entzerrten das Bild gespiegelt — so ein Zug zaehlt nicht.
+		if (!zugErlaubt(quad, geklemmt)) return;
+		quad = geklemmt;
+		rand = 'vonHand';
 	}
 
 	async function fertig() {
@@ -87,7 +98,12 @@
 			// bis drei Sekunden am Stueck, und ohne Rueckmeldung sieht das wie ein Haenger aus.
 			await tick();
 			await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
-			const blob = await ausschneiden(leinwand, quad);
+			// 2.14a: aus einer weiss gefuellten Fassung ausschneiden; die Erkennung bleibt auf Schwarz.
+			const weiss = ausschnittLeinwand(bild, viertel, fein);
+			const blob = await ausschneiden(weiss, quad).finally(() => {
+				weiss.width = 0;
+				weiss.height = 0;
+			});
 			rechnet = false;
 			await onfertig(blob);
 		} catch (err) {
@@ -101,14 +117,17 @@
 <div class="grid min-w-0 gap-3">
 	<div class="rounded-2xl bg-tinte p-2">
 		<div class="relative mx-auto select-none" style="width: min(100%, calc(62dvh * {masse.breite} / {masse.hoehe}))">
-			<canvas bind:this={leinwand} class="block h-auto w-full rounded-xl"></canvas>
-			{#if quad}
+			<div class="overflow-hidden rounded-xl">
+				<canvas bind:this={leinwand} class="block h-auto w-full" style="transform: rotate({vorschauGrad}deg)"></canvas>
+			</div>
+			<!-- Viereck und Griffe gehoeren zur alten Drehung und werden beim Loslassen neu gesetzt. -->
+			{#if quad && vorschauGrad === 0}
 				<svg class="pointer-events-none absolute inset-0 h-full w-full" viewBox="0 0 {masse.breite} {masse.hoehe}" preserveAspectRatio="none" aria-hidden="true">
 					<polygon
 						points={quad.map((p) => `${p.x},${p.y}`).join(' ')}
 						fill="rgba(7,174,183,0.12)"
 						stroke="#07aeb7"
-						stroke-width={Math.max(2, masse.breite / 300)}
+						stroke-width="2"
 						vector-effect="non-scaling-stroke"
 					/>
 				</svg>
@@ -130,9 +149,9 @@
 						<span class="h-8 w-8 rounded-full border-2 border-white bg-tuerkis/80 shadow"></span>
 					</button>
 				{/each}
-				{#if erkannt}
+				{#if hinweis.chip}
 					<!-- pointer-events-none: der Chip darf den Griff oben links nicht verdecken. -->
-					<span class="pointer-events-none absolute top-2 left-2 rounded-full bg-tuerkis-flaeche px-2.5 py-1 text-[12px] font-extrabold text-tuerkis-dunkel">Rand gefunden – bitte prüfen</span>
+					<span class="pointer-events-none absolute top-2 left-2 rounded-full bg-tuerkis-flaeche px-2.5 py-1 text-[12px] font-extrabold text-tuerkis-dunkel">{hinweis.chip}</span>
 				{/if}
 			{/if}
 		</div>
@@ -160,8 +179,8 @@
 				<span class="w-14 text-right tabular-nums">{feinAnzeige > 0 ? '+' : ''}{feinAnzeige.toLocaleString('de-DE')}°</span>
 			</label>
 		</div>
-		{#if !erkannt}
-			<p class="text-[12.5px] font-semibold text-gedaempft">Rand nicht sicher erkannt — zieh die vier Ecken an die Ecken des Bons. Auf dunklem Untergrund klappt es von selbst besser.</p>
+		{#if hinweis.warnung}
+			<p class="text-[12.5px] font-semibold text-gedaempft">{hinweis.warnung}</p>
 		{/if}
 	</div>
 
@@ -172,10 +191,12 @@
 			type="button"
 			class="flex h-14 w-full items-center justify-center rounded-2xl bg-marine font-semibold text-white disabled:opacity-60"
 			disabled={rechnet || beschaeftigt || !quad}
+			data-autofocus
 			onclick={fertig}
 		>
 			{rechnet ? 'Wird vorbereitet …' : hauptText}
 		</button>
-		<button type="button" class="h-11 w-full rounded-2xl bg-chip font-medium text-tinte" onclick={onabbrechen}>Abbrechen</button>
+		<!-- Waehrend des Vorbereitens und Hochladens nicht: der Bon wuerde trotzdem hochgeladen (1.7). -->
+		<button type="button" class="h-11 w-full rounded-2xl bg-chip font-medium text-tinte disabled:opacity-60" disabled={rechnet || beschaeftigt} onclick={onabbrechen}>Abbrechen</button>
 	</div>
 </div>

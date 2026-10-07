@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import {
 	zeitraumName, blaetterZiele, wechsleArt, vergleichsZeitraeume, verlaufsAchse, ladeFenster,
-	monatImZeitraum, zeitwahlKacheln, jahresAuswahl, vergleichText, adresse, leerText, zurueckZumBericht
+	monatImZeitraum, zeitwahlKacheln, jahresAuswahl, vergleichText, adresse, leerText, zurueckZumBericht,
+	vergleichKlasse,
+	zeitwahlJahrZiel
 } from './zeitleiste';
 import { leererFilter } from './filter';
 
@@ -160,17 +162,52 @@ describe('jahresAuswahl', () => {
 });
 
 describe('vergleichText', () => {
+	const f = leererFilter({ art: 'monat', monat: '2026-09' });
 	it('nennt Vorzeichen und Wort, nicht nur eine Farbe', () => {
-		expect(vergleichText({ bezeichnung: 'August 2026', cents: 10000, prozent: 12 })).toBe('+12 % zu August 2026');
-		expect(vergleichText({ bezeichnung: 'August 2026', cents: 10000, prozent: -5 })).toBe('−5 % zu August 2026');
-		expect(vergleichText({ bezeichnung: 'August 2026', cents: 10000, prozent: 0 })).toBe('±0 % zu August 2026');
+		expect(vergleichText({ bezeichnung: 'August 2026', cents: 10000, prozent: 12 }, f)).toBe('+12 % zu August 2026');
+		expect(vergleichText({ bezeichnung: 'August 2026', cents: 10000, prozent: -5 }, f)).toBe('−5 % zu August 2026');
+		expect(vergleichText({ bezeichnung: 'August 2026', cents: 10000, prozent: 0 }, f)).toBe('±0 % zu August 2026');
 	});
 
 	it('behauptet keinen Vergleich, wo es keinen gibt', () => {
-		expect(vergleichText({ bezeichnung: 'August 2026', cents: null, prozent: null })).toBe(
+		expect(vergleichText({ bezeichnung: 'August 2026', cents: null, prozent: null }, f)).toBe(
 			'Kein Vergleich zu August 2026 — dort liegt kein bestätigter Bon'
 		);
-		expect(vergleichText({ bezeichnung: 'August 2026', cents: 0, prozent: null })).toBe(
+		expect(vergleichText({ bezeichnung: 'August 2026', cents: 0, prozent: null }, f)).toBe(
+			'Kein Prozentwert zu August 2026 (0,00 €)'
+		);
+	});
+});
+
+// Sammelfassung 3.2: unter einem Filter (oder „Nur meine") kann der Vergleichszeitraum
+// sehr wohl bestaetigte Bons haben — nur keine PASSENDEN.
+describe('vergleichText mit Filter', () => {
+	const f = leererFilter({ art: 'monat', monat: '2026-09' });
+	const leer = { bezeichnung: 'August 2026', cents: null, prozent: null };
+
+	it('sagt ohne Filter „kein bestätigter Bon"', () => {
+		expect(vergleichText(leer, f)).toBe('Kein Vergleich zu August 2026 — dort liegt kein bestätigter Bon');
+	});
+
+	it('sagt mit Filter „kein passender bestätigter Bon"', () => {
+		expect(vergleichText(leer, { ...f, kategorie: ['obst'] })).toBe(
+			'Kein Vergleich zu August 2026 — dort liegt kein passender bestätigter Bon'
+		);
+		// Filter geht vor „Nur meine", wie in leerText.
+		expect(vergleichText(leer, { ...f, umfang: 'meine', suche: 'Kaffee' })).toBe(
+			'Kein Vergleich zu August 2026 — dort liegt kein passender bestätigter Bon'
+		);
+	});
+
+	it('sagt unter „Nur meine" „kein eigener bestätigter Bon"', () => {
+		expect(vergleichText(leer, { ...f, umfang: 'meine' })).toBe(
+			'Kein Vergleich zu August 2026 — dort liegt kein eigener bestätigter Bon'
+		);
+	});
+
+	it('laesst Prozent- und Betragstexte unberuehrt', () => {
+		expect(vergleichText({ bezeichnung: 'August 2026', cents: 10000, prozent: 12 }, { ...f, laden: ['ohne'] })).toBe('+12 % zu August 2026');
+		expect(vergleichText({ bezeichnung: 'August 2026', cents: 0, prozent: null }, { ...f, laden: ['ohne'] })).toBe(
 			'Kein Prozentwert zu August 2026 (0,00 €)'
 		);
 	});
@@ -229,5 +266,38 @@ describe('zurueckZumBericht', () => {
 
 	it('faellt ohne Ruecksprungadresse auf den Bericht ohne Laden und Kategorie zurueck', () => {
 		expect(zurueckZumBericht(null, { ...f, kategorie: ['obst'], suche: 'x' }, HEUTE)).toBe('/reports?zeitraum=monat&monat=2026-09&suche=x');
+	});
+});
+
+// Sammelfassung 3.4: text-gedaempft und die Richtungsfarbe standen gleichzeitig am Element —
+// welche gewann, entschied die Reihenfolge im erzeugten CSS.
+describe('vergleichKlasse', () => {
+	it('gibt genau EINE Farbklasse', () => {
+		expect(vergleichKlasse({ bezeichnung: 'x', cents: 100, prozent: 12 })).toBe('text-rot-dunkel');
+		expect(vergleichKlasse({ bezeichnung: 'x', cents: 100, prozent: -5 })).toBe('text-tuerkis-dunkel');
+		expect(vergleichKlasse({ bezeichnung: 'x', cents: 100, prozent: 0 })).toBe('text-gedaempft');
+		expect(vergleichKlasse({ bezeichnung: 'x', cents: 0, prozent: null })).toBe('text-gedaempft');
+		expect(vergleichKlasse({ bezeichnung: 'x', cents: null, prozent: null })).toBe('text-gedaempft');
+	});
+});
+
+// Sammelfassung 3.5: ‹ und › der Zeitwahl sind Links — ohne JavaScript fuehren sie zum
+// selben Monat im Vor-/Folgejahr.
+describe('zeitwahlJahrZiel', () => {
+	it('fuehrt zum selben Monat im Vorjahr', () => {
+		expect(zeitwahlJahrZiel('2026-03', 2026, -1, HEUTE)).toEqual({ art: 'monat', monat: '2025-03' });
+	});
+
+	it('nimmt den Monat ins schon geblaetterte Jahr mit', () => {
+		expect(zeitwahlJahrZiel('2026-03', 2024, 1, HEUTE)).toEqual({ art: 'monat', monat: '2025-03' });
+	});
+
+	it('endet in der Zukunft beim laufenden Monat', () => {
+		expect(zeitwahlJahrZiel('2025-11', 2025, 1, HEUTE)).toEqual({ art: 'monat', monat: '2026-09' });
+	});
+
+	it('hat kein Ziel nach dem laufenden und vor dem fruehesten Jahr', () => {
+		expect(zeitwahlJahrZiel('2026-03', 2026, 1, HEUTE)).toBeNull();
+		expect(zeitwahlJahrZiel('2000-05', 2000, -1, HEUTE)).toBeNull();
 	});
 });

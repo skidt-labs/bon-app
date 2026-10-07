@@ -31,15 +31,27 @@ describe('alsFilter', () => {
 describe('istGeaendert', () => {
 	const gespeichert = { parameter: { laden: UUID }, zeitraum: null };
 	const lies = (q: string) => filterAusAdresse(new URLSearchParams(q), HEUTE).filter;
+	const wirksam = (b: Parameters<typeof alsFilter>[0]) => alsFilter(b, HEUTE).filter;
 
 	it('vergleicht nur die Merkmale, wenn kein Zeitraum gespeichert ist', () => {
-		expect(istGeaendert(gespeichert, lies(`laden=${UUID}&monat=2026-05`))).toBe(false);
-		expect(istGeaendert(gespeichert, lies(`laden=${UUID}&suche=x`))).toBe(true);
+		expect(istGeaendert(gespeichert, wirksam(gespeichert), lies(`laden=${UUID}&monat=2026-05`))).toBe(false);
+		expect(istGeaendert(gespeichert, wirksam(gespeichert), lies(`laden=${UUID}&suche=x`))).toBe(true);
 	});
 
 	it('vergleicht auch den Zeitraum, wenn er gespeichert ist', () => {
 		const mit = { parameter: {}, zeitraum: { zeitraum: 'jahr', jahr: '2025' } };
-		expect(istGeaendert(mit, lies('zeitraum=jahr&jahr=2025'))).toBe(false);
-		expect(istGeaendert(mit, lies('zeitraum=jahr&jahr=2024'))).toBe(true);
+		expect(istGeaendert(mit, wirksam(mit), lies('zeitraum=jahr&jahr=2025'))).toBe(false);
+		expect(istGeaendert(mit, wirksam(mit), lies('zeitraum=jahr&jahr=2024'))).toBe(true);
+	});
+
+	// Sammelfassung 3.6: ein inzwischen geloeschter Laden fiel beim Oeffnen weg, und schon
+	// stand „Änderungen speichern" da — obwohl niemand etwas geaendert hatte.
+	it('wertet das Bereinigen nicht als Aenderung', () => {
+		const ZWEI = '3f2a0b7c-5555-6666-7777-888888888888';
+		const b = { parameter: { laden: `${UUID},${ZWEI}` }, zeitraum: null };
+		const bereinigt = { ...wirksam(b), laden: [ZWEI] }; // UUID gibt es nicht mehr
+		expect(istGeaendert(b, bereinigt, lies(`laden=${ZWEI}`))).toBe(false);
+		expect(istGeaendert(b, bereinigt, lies(''))).toBe(true);
+		expect(istGeaendert(b, bereinigt, lies(`laden=${ZWEI}&suche=Kaffee`))).toBe(true);
 	});
 });

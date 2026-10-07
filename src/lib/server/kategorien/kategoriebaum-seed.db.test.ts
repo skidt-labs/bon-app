@@ -1,47 +1,30 @@
 /**
- * Beweist die Idempotenz des Kategoriebaum-Seeds (drizzle/0011_kategoriebaum.sql)
- * GEGEN DIE ECHTE DATENBANK — deshalb hinter RUN_DB_TESTS=1, wie
- * fk-integrity.db.test.ts und household.db.test.ts.
+ * Beweist die Idempotenz des Kategoriebaum-Seeds (drizzle/0011_kategoriebaum.sql) gegen die
+ * Test-Datenbank — hinter RUN_DB_TESTS=1:
  *
- *   RUN_DB_TESTS=1 npx vitest run src/lib/server/kategorien/kategoriebaum-seed.db.test.ts
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
+ *     npx vitest run src/lib/server/kategorien/kategoriebaum-seed.db.test.ts
  *
- * WICHTIG: Diese Migration ist bewusst noch NICHT per `npm run db:migrate` angewendet.
- * In bon-db liegen echte Bons des Betreibers, und ob der Kategorie-Startbestand
- * dauerhaft eingespielt wird, entscheidet er, nicht dieser Test (siehe Bericht). Die
- * gesamte Probe läuft deshalb in EINER Transaktion mit ROLLBACK: das Migrations-SQL
- * wird darin zweimal hintereinander ausgeführt — das IST der Beweis, dass ein
- * zweiter Lauf nichts verdoppelt —, und ROLLBACK macht danach jede Spur rückgängig.
- * Ein Seed, der beim zweiten Einspielen verdoppelt, ist eine Zeitbombe.
+ * In bon_test ist der Baum mit den Migrationen schon eingespielt. Die Probe spielt das
+ * Migrations-SQL in EINER Transaktion zweimal ein — das IST der Beweis, dass ein weiterer Lauf
+ * nichts verdoppelt — und rollt zurueck. Dass das ROLLBACK greift, zeigt eine Merkzeile aus
+ * derselben Transaktion, die danach fehlen muss.
  */
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { psql } from '$lib/server/db/testdaten';
 import { KATEGORIEBAUM } from './baum';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
-
-const MIGRATION_PATH = path.resolve(
-	path.dirname(fileURLToPath(import.meta.url)),
-	'../../../../drizzle/0011_kategoriebaum.sql'
-);
-
-function psql(sql: string): string {
-	return execFileSync('docker', ['exec', 'bon-db', 'psql', '-q', '-U', 'bon', '-d', 'bon', '-tAc', sql], {
-		encoding: 'utf8'
-	}).trim();
-}
-
-// Gegen KATEGORIEBAUM gerechnet, nicht fest eingetippt — dieselbe Zaehlprobe wie im
-// Auftrag beschrieben ("13/35 faengt ein Vertippen"), hier aus der EINEN Quelle
-// abgeleitet, damit sie mit dem Baum mitwaechst statt zu veralten.
+const MIGRATION_PATH = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../../../drizzle/0011_kategoriebaum.sql');
 const ERWARTET_OBER = KATEGORIEBAUM.length;
 const ERWARTET_UNTER = KATEGORIEBAUM.reduce((n, o) => n + o.kinder.length, 0);
 const ERWARTET_GESAMT = ERWARTET_OBER + ERWARTET_UNTER;
 
-describe.skipIf(!RUN)('Kategoriebaum-Seed (live, ROLLBACK)', () => {
-	it('legt den Baum an und bleibt beim zweiten Lauf zahlengleich', () => {
+describe.skipIf(!RUN)('Kategoriebaum-Seed (bon_test, ROLLBACK)', () => {
+	it('bleibt bei zwei weiteren Laeufen zahlengleich', () => {
 		const migration = readFileSync(MIGRATION_PATH, 'utf8');
 		const out = psql(`
 			begin;
@@ -51,17 +34,14 @@ describe.skipIf(!RUN)('Kategoriebaum-Seed (live, ROLLBACK)', () => {
 				||' unter='||count(*) filter (where parent_id is not null)
 				||' slugs='||count(distinct slug)||'/'||count(*)
 				from categories;
+			insert into categories (name, slug) values ('Probe', 'kategoriebaum-probe');
 			rollback;
 		`);
-		expect(out).toBe(
-			`ober=${ERWARTET_OBER} unter=${ERWARTET_UNTER} slugs=${ERWARTET_GESAMT}/${ERWARTET_GESAMT}`
-		);
+		expect(out).toBe(`ober=${ERWARTET_OBER} unter=${ERWARTET_UNTER} slugs=${ERWARTET_GESAMT}/${ERWARTET_GESAMT}`);
 	});
 
-	// ROLLBACK sollte das ohnehin garantieren — trotzdem nachgemessen, aus demselben
-	// Grund wie in fk-integrity.db.test.ts: ein Waechter, der sein eigenes Aufraeumen
-	// nur vermutet statt es zu pruefen, kann irgendwann leise falsch werden.
-	it('hinterlässt keine Spur — kein dauerhaftes Einspielen ohne Freigabe', () => {
-		expect(psql('select count(*) from categories')).toBe('0');
+	it('hinterlässt keine Spur — die Merkzeile ist weg, der Baum steht wie aus den Migrationen', () => {
+		expect(psql("select count(*) from categories where slug = 'kategoriebaum-probe'")).toBe('0');
+		expect(psql('select count(*) from categories')).toBe(String(ERWARTET_GESAMT));
 	});
 });

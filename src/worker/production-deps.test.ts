@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { auftragsFrist } from '$lib/server/queue/fristen';
 
 // $lib/server/db/schema hat keine Nebenwirkungen (reine Tabellendefinitionen) und wird
 // bewusst NICHT gemockt: eq(receipts.id, ...) und die table-Objekte selbst (zum
@@ -718,5 +719,16 @@ describe('productionDeps — Rolle und Kategorie-Verbrauch (Cloud-Reserve)', () 
 		const neuerAuftrag = vi.fn();
 		productionDeps({ ...anbieter(), neuerAuftrag }).auftragBeginnt?.();
 		expect(neuerAuftrag).toHaveBeenCalledTimes(1);
+	});
+
+	it('4.5: fragt die Kategorien mit der Frist und dem Signal des Auftrags', async () => {
+		const frist = auftragsFrist(Date.now());
+		const signal = new AbortController().signal;
+		await productionDeps(anbieter()).saveResult({
+			receiptId: 'r1', result: bon, raw: bon, servedModel: 'flash', problems: [], provider: 'ocr-text',
+			model: 'flash', durationMs: 5, usage: null, ocrText: 'MILCH 1,00', ocr: null, ocrZeilen: null,
+			frist, signal
+		});
+		expect(mocks.echteModellDeps).toHaveBeenCalledWith({ ziel, auftrag: { frist, signal } });
 	});
 });

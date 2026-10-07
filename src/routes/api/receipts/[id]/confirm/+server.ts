@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+import { statusSperrText } from '$lib/bons/sperrtext';
 import { db } from '$lib/server/db';
 import { bonLaden } from '$lib/server/bons/liste';
 import {
@@ -27,14 +28,7 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	// `failed` darf auch: ein Mensch hat den Bon von Hand eingetragen, weil das Auslesen
 	// scheiterte (27.09.2026). Das Bild ist da, und wer bestaetigt, hat es angesehen.
 	if (receipt.status !== 'review' && receipt.status !== 'failed') {
-		error(
-			409,
-			receipt.status === 'confirmed'
-				? 'Dieser Bon ist bereits bestätigt.'
-				: receipt.status === 'doppelt'
-					? 'Dieser Bon ist als doppelt verworfen und kann darum nicht bestätigt werden.'
-					: 'Dieser Bon wird gerade ausgelesen und kann darum nicht bestätigt werden.'
-		);
+		error(409, statusSperrText(receipt.status));
 	}
 
 	// Offener Doppel-Hinweis (bons/doppelt.ts): erst entscheiden, dann bestaetigen. Sonst

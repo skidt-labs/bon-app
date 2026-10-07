@@ -1,8 +1,8 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1.
  * Läuft nicht in der normalen Suite (die muss ohne Datenbank auskommen).
  *
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/haushalt/einladungen.db.test.ts
  *
  * `einladungErzeugen`/`einladungEinloesen`/`rolleSetzen`/`mitgliedEntfernen` rufen
@@ -13,9 +13,14 @@
  * committet unabhaengig von einer aeusseren. Deshalb hier wie in household.db.test.ts:
  * echte, getaggte Zeilen anlegen und in `afterAll` gezielt wieder entfernen.
  */
-import { describe, it, expect, afterAll } from 'vitest';
+import { describe, it, expect, afterAll, vi } from 'vitest';
+// Nie eine echte Datei: mitgliedEntfernen loescht die Bilder nach dem Commit (2.15 prueft, welche).
+const geloeschteBilder = vi.hoisted(() => [] as string[][]);
+vi.mock('../storage/images', async (importOriginal) => ({
+	...(await importOriginal<typeof import('../storage/images')>()),
+	loescheBilder: vi.fn(async (pfade: string[]) => void geloeschteBilder.push(pfade))
+}));
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
 import { and, count, eq, inArray } from 'drizzle-orm';
 import { db } from '../db';
 import { households, users, householdMembers, receipts, budgets, budgetKategorien, products, einladungen, matrixLinks, matrixPairingCodes } from '../db/schema';
@@ -23,17 +28,12 @@ import { einladungErzeugen, einladungPruefen, einladungEinloesen, rolleSetzen, m
 import { mitgliedschaftWiederherstellen } from '../household';
 import { nutzerZuMatrixId } from '../matrix/links';
 import { codeAnlegen, codeEinloesen } from '../matrix/pairing';
+import { psql } from '../db/testdaten';
 import type { Rolle } from './mitglieder';
 import type { Zugriffskontext } from '../zugriff/kontext';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
 const TAG = `test-einladung-${Date.now()}`;
-
-function psql(sqlText: string): string {
-	return execFileSync('docker', ['exec', 'bon-db', 'psql', '-q', '-U', 'bon', '-d', 'bon', '-tAc', sqlText], {
-		encoding: 'utf8'
-	}).trim();
-}
 
 const haushaltIds: string[] = [];
 const userIds: string[] = [];
@@ -667,6 +667,7 @@ describe.skipIf(!RUN)('Wiedereinstieg nach mitgliedEntfernen (live)', () => {
 	});
 
 	it('nimmt das Private mit und laesst das Geteilte beim Haushalt', async () => {
+		geloeschteBilder.length = 0;
 		const h = await neuerHaushalt('privatweg');
 		const chef = await neuesMitglied(h, 'verwalter', 'chef-privatweg');
 		const wer = await neuesMitglied(h, 'mitglied', 'geht-privatweg');
@@ -677,8 +678,11 @@ describe.skipIf(!RUN)('Wiedereinstieg nach mitgliedEntfernen (live)', () => {
 				.values({
 					householdId: h,
 					uploadedBy: wer,
-					imagePath: `${TAG}/erfunden.webp`,
-					thumbPath: `${TAG}/erfunden-klein.webp`,
+					imagePath: `${TAG}/${sichtbarkeit}.webp`,
+					thumbPath: `${TAG}/${sichtbarkeit}-klein.webp`,
+					// 2.15: ein bearbeiteter Bon traegt sein Original (bons/bild.ts) — es muss mit weg.
+					originalImagePath: `${TAG}/${sichtbarkeit}-original.webp`,
+					originalThumbPath: `${TAG}/${sichtbarkeit}-original-klein.webp`,
 					sichtbarkeit
 				})
 				.returning({ id: receipts.id });
@@ -701,6 +705,10 @@ describe.skipIf(!RUN)('Wiedereinstieg nach mitgliedEntfernen (live)', () => {
 		expect(vorschau).toEqual({ privateBons: 1, privateToepfe: 1 });
 
 		await mitgliedEntfernen({ haushaltId: h, nutzerId: chef, rolle: 'verwalter' }, wer);
+		// 2.15: nach dem Commit genau die vier Dateien des privaten Bons — nichts vom geteilten.
+		expect(geloeschteBilder).toEqual([
+			[`${TAG}/privat.webp`, `${TAG}/privat-klein.webp`, `${TAG}/privat-original.webp`, `${TAG}/privat-original-klein.webp`]
+		]);
 
 		const bonDa = async (id: string) =>
 			(await db.select({ id: receipts.id }).from(receipts).where(eq(receipts.id, id))).length > 0;

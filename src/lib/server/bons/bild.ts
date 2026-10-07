@@ -6,8 +6,9 @@
  * nur die Zwischenfassung (die dann geloescht wird). „Original wiederherstellen" holt es zurueck.
  *
  * Nur fehlgeschlagene und zu pruefende Bons, nur wer hochgeladen hat oder der Verwalter
- * (Entscheidung 27.09.2026). Das UPDATE prueft den gelesenen Status selbst; trifft es nichts,
- * werden die gerade gespeicherten Dateien wieder geloescht — sonst blieben sie verwaist liegen.
+ * (Entscheidung 27.09.2026). Das UPDATE prueft gelesenen Status UND Bildpfad selbst; trifft es
+ * nichts oder scheitert die Datenbank, werden die gerade gespeicherten Dateien wieder geloescht —
+ * sonst blieben sie verwaist liegen (Sammelfassung 4.1).
  */
 import { and, eq } from 'drizzle-orm';
 import type { db as Db } from '$lib/server/db';
@@ -57,23 +58,42 @@ async function bearbeitbarerBon(
 	return { bon, fehler: null };
 }
 
+/** Was vom alten Lauf nicht mehr gilt: der Bon wird mit dem neuen Bild neu gelesen. */
+const NEU_LESEN = { status: 'pending' as const, failureReason: null, needsReviewReason: null, vermutetesOriginalId: null };
+
+type Pfade = { imagePath: string; thumbPath: string; originalImagePath: string | null; originalThumbPath: string | null };
+
 /**
- * Neu lesen wie „Erneut lesen": scheitert das Einreihen, steht der Bon auf fehlgeschlagen.
- * Vorher die Zuordnung der Positionen zum ALTEN Bild loesen (Pruefung 30.09.2026): sonst
- * zeigten ihre Rahmen bis zum neuen Lesen — oder fuer immer, wenn es scheitert — an falsche
- * Stellen des bearbeiteten Bilds.
+ * Bild umstellen und die Zuordnung der Positionen zum ALTEN Bild loesen — in EINER Transaktion
+ * (Sammelfassung 4.1): scheiterte das Loesen der Rahmen vorher, stand der Bon auf „wartet" ohne
+ * Auftrag. Die Rahmen muessen weg (Pruefung 30.09.2026), sonst zeigten sie bis zum neuen Lesen
+ * — oder fuer immer, wenn es scheitert — an falsche Stellen des bearbeiteten Bilds.
+ *
+ * Das UPDATE prueft neben dem gelesenen Status auch den gelesenen Bildpfad (Sammelfassung 4.1):
+ * ein anderer Tab kann den Bon zwischen Laden und Schreiben bearbeitet haben, und ist der schon
+ * wieder gelesen, stimmt der Status wieder. false = der Bon hat sich geaendert, nichts geschrieben.
  */
-async function neuLesen(d: Verbindung, bonId: string, deps: BildDeps) {
-	await d.update(receiptItems).set({ ocrZeile: null }).where(eq(receiptItems.receiptId, bonId));
+async function umstellen(d: Verbindung, bon: Bon, pfade: Pfade): Promise<boolean> {
+	return d.transaction(async (tx) => {
+		const getroffen = await tx
+			.update(receipts)
+			.set({ ...pfade, ...NEU_LESEN })
+			.where(and(eq(receipts.id, bon.id), eq(receipts.status, bon.status), eq(receipts.imagePath, bon.imagePath)))
+			.returning({ id: receipts.id });
+		if (getroffen.length !== 1) return false;
+		await tx.update(receiptItems).set({ ocrZeile: null }).where(eq(receiptItems.receiptId, bon.id));
+		return true;
+	});
+}
+
+/** Neu lesen wie „Erneut lesen": scheitert das Einreihen, steht der Bon auf fehlgeschlagen. */
+async function einreihen(d: Verbindung, bonId: string, deps: BildDeps) {
 	try {
 		await deps.einreihen(bonId);
 	} catch (err) {
 		await bonAlsFehlgeschlagenMarkieren(d, bonId, err instanceof Error ? err.message : String(err));
 	}
 }
-
-/** Was vom alten Lauf nicht mehr gilt: der Bon wird mit dem neuen Bild neu gelesen. */
-const NEU_LESEN = { status: 'pending' as const, failureReason: null, needsReviewReason: null, vermutetesOriginalId: null };
 
 export async function bildErsetzen(
 	d: Verbindung,
@@ -92,24 +112,26 @@ export async function bildErsetzen(
 		throw new BildSpeicherFehler(istSystemfehler(err));
 	}
 	const erstesMal = bon.originalImagePath === null;
-	const getroffen = await d
-		.update(receipts)
-		.set({
+	let getroffen: boolean;
+	try {
+		getroffen = await umstellen(d, bon, {
 			imagePath: neu.imagePath,
 			thumbPath: neu.thumbPath,
 			originalImagePath: erstesMal ? bon.imagePath : bon.originalImagePath,
-			originalThumbPath: erstesMal ? bon.thumbPath : bon.originalThumbPath,
-			...NEU_LESEN
-		})
-		.where(and(eq(receipts.id, bon.id), eq(receipts.status, bon.status)))
-		.returning({ id: receipts.id });
-	if (getroffen.length !== 1) {
+			originalThumbPath: erstesMal ? bon.thumbPath : bon.originalThumbPath
+		});
+	} catch (err) {
+		// Die Transaktion ist zurueckgerollt: auf die neuen Dateien zeigt nichts (Sammelfassung 4.1).
+		await deps.loeschen([neu.imagePath, neu.thumbPath]);
+		throw err;
+	}
+	if (!getroffen) {
 		await deps.loeschen([neu.imagePath, neu.thumbPath]);
 		return GEAENDERT;
 	}
 	// Die Zwischenfassung einer frueheren Bearbeitung braucht niemand mehr — das Original bleibt.
 	if (!erstesMal) await deps.loeschen([bon.imagePath, bon.thumbPath]);
-	await neuLesen(d, bon.id, deps);
+	await einreihen(d, bon.id, deps);
 	return { ok: true };
 }
 
@@ -125,19 +147,9 @@ export async function originalWiederherstellen(
 	if (bon.originalImagePath === null || bon.originalThumbPath === null) {
 		return { ok: false, status: 409, meldung: 'Dieser Bon hat kein gespeichertes Original.' };
 	}
-	const getroffen = await d
-		.update(receipts)
-		.set({
-			imagePath: bon.originalImagePath,
-			thumbPath: bon.originalThumbPath,
-			originalImagePath: null,
-			originalThumbPath: null,
-			...NEU_LESEN
-		})
-		.where(and(eq(receipts.id, bon.id), eq(receipts.status, bon.status)))
-		.returning({ id: receipts.id });
-	if (getroffen.length !== 1) return GEAENDERT;
+	const getroffen = await umstellen(d, bon, { imagePath: bon.originalImagePath, thumbPath: bon.originalThumbPath, originalImagePath: null, originalThumbPath: null });
+	if (!getroffen) return GEAENDERT;
 	await deps.loeschen([bon.imagePath, bon.thumbPath]);
-	await neuLesen(d, bon.id, deps);
+	await einreihen(d, bon.id, deps);
 	return { ok: true };
 }

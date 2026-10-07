@@ -11,6 +11,7 @@
  * und das sieht niemand.
  */
 import { MONETAER, type LineType } from '$lib/bons/zeilenarten';
+import { wartetAufLesen } from '$lib/bons/anzeige';
 
 export { MONETAER, ART_TEXT, ZEILENARTEN, type LineType } from '$lib/bons/zeilenarten';
 
@@ -171,4 +172,21 @@ export function handEingabeBegonnen(
 			text(z.unit) ||
 			z.unitPriceCents !== null
 	);
+}
+
+/**
+ * Schluessel der eigenen Kopie in der Pruefansicht. Wechselt mit dem Bon, wenn das Warten aufs
+ * Lesen endet (2.6) und wenn er den Papierkorb verlaesst — in beiden Faellen waren die Felder
+ * gesperrt, es geht keine Korrektur verloren. Zwischen „Pruefen" und „Bestaetigt" bleibt er.
+ * Bon-Ids sind UUIDs, enthalten also nie einen Doppelpunkt.
+ */
+export function kopieSchluessel(id: string, status: string): string {
+	if (wartetAufLesen(status)) return `${id}:wartet`;
+	if (status === 'verworfen') return `${id}:papierkorb`;
+	return id;
+}
+
+/** Gehoeren zwei Kopie-Schluessel zum selben Bon? '' (noch nichts angezeigt, bewusst zurueckgesetzt) nie. */
+export function selberBon(alt: string, neu: string): boolean {
+	return alt !== '' && alt.split(':')[0] === neu.split(':')[0];
 }

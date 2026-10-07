@@ -84,6 +84,24 @@ export async function positionenZu(db: typeof Db, bonIds: string[]): Promise<Pos
 		.orderBy(asc(receiptItems.receiptId), asc(receiptItems.lineNo));
 }
 
+/**
+ * Betraege je Monat fuer die Kacheln der Zeitwahl: bestaetigte, sichtbare Bons im Umfang,
+ * ohne weitere Filter. Auch die Jahresliste der Zeitwahl ergibt sich daraus — deshalb
+ * laden Bericht UND „Bons zu …" sie (Sammelfassung 3.3).
+ */
+export async function monatsSummenLaden(
+	db: typeof Db,
+	k: Zugriffskontext,
+	f: Pick<BerichtFilter, 'umfang'>
+): Promise<Record<string, number>> {
+	const zeilen = await db
+		.select({ monat: alsMonat, cents: sql<number>`coalesce(sum(${receipts.totalGrossCents}), 0)::int` })
+		.from(receipts)
+		.where(and(bonBedingung(k, f), eq(receipts.status, 'confirmed')))
+		.groupBy(alsMonat);
+	return Object.fromEntries(zeilen.map((s) => [s.monat, s.cents]));
+}
+
 type Position = PostenZeile & { receiptId: string };
 
 /** Ausgaben je EINZELNER Kategorie, getrennt nach geteilt/privat (siehe budgetstand). */
@@ -124,16 +142,12 @@ export async function berichtLaden(db: typeof Db, k: Zugriffskontext, filterRoh:
 	if (filter.betrag !== null) hinweise.push('Bons ohne erkannte Endsumme fallen bei einer Betragsspanne heraus.');
 	const positionsfilter = kriterienAktiv(kriterien);
 
-	const [bonsRoh, zahlen, summenJeMonat] = await Promise.all([
+	const [bonsRoh, zahlen, monatsSummen] = await Promise.all([
 		bonsImFenster(db, k, filter, grenzen),
 		// Der Vorbehalt: was noch ungeprueft danebenliegt — ueber alle Monate.
 		monatszahlenLaden(db, k, monatVon(heute)),
 		// Betraege je Monat fuer die Kacheln der Zeitwahl: nur Umfang, ohne weitere Filter.
-		db
-			.select({ monat: alsMonat, cents: sql<number>`coalesce(sum(${receipts.totalGrossCents}), 0)::int` })
-			.from(receipts)
-			.where(and(bonBedingung(k, filter), eq(receipts.status, 'confirmed')))
-			.groupBy(alsMonat)
+		monatsSummenLaden(db, k, filter)
 	]);
 	const bons = bonsRoh.filter((b) => bonPasst(b, filter));
 
@@ -206,6 +220,6 @@ export async function berichtLaden(db: typeof Db, k: Zugriffskontext, filterRoh:
 		/** Bons ohne gelesene Endsumme — sie zaehlen als Bon, aber nicht als Betrag. */
 		ohneBetrag: positionsfilter ? 0 : haupt.filter((b) => b.cents === null).length,
 		rueckstand: zahlen.rueckstand,
-		monatsSummen: Object.fromEntries(summenJeMonat.map((s) => [s.monat, s.cents])) as Record<string, number>
+		monatsSummen
 	};
 }

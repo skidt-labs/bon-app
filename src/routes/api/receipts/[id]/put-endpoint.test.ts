@@ -283,4 +283,29 @@ describe('PUT /api/receipts/[id]', () => {
 		}
 		expect(isHttpError(caught, 400)).toBe(true);
 	});
+
+	// 2.2: alles ausser „doppelt" hiess „wird gerade ausgelesen" — auch ein Bon im Papierkorb.
+	it('nennt beim Bon im Papierkorb den Papierkorb', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'verworfen' }];
+		let caught: unknown;
+		try {
+			await PUT(fakeEvent(rumpf()));
+		} catch (err) {
+			caught = err;
+		}
+		expect(isHttpError(caught, 409)).toBe(true);
+		expect((caught as { body: { message: string } }).body.message).toBe('Dieser Bon liegt im Papierkorb.');
+		expect(mocks.updateCalls).toHaveLength(0);
+	});
+
+	it('sagt bei einem wartenden Bon „wird gerade gelesen"', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'pending' }];
+		let caught: unknown;
+		try {
+			await PUT(fakeEvent(rumpf()));
+		} catch (err) {
+			caught = err;
+		}
+		expect((caught as { body: { message: string } }).body.message).toBe('Dieser Bon wird gerade gelesen.');
+	});
 });

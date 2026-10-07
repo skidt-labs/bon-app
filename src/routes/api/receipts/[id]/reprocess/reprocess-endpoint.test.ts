@@ -184,4 +184,31 @@ describe('POST /api/receipts/[id]/reprocess', () => {
 		expect(typeof setArg.failureReason).toBe('string');
 		expect(setArg.failureReason.length).toBeGreaterThan(0);
 	});
+
+	// Nebenbefund 07.10.2026: „(Status: verworfen)" war ein Spaltenwert, kein Satz.
+	it('nennt beim Bon im Papierkorb den Papierkorb statt eines Statusnamens', async () => {
+		mocks.returningRows = [[]];
+		mocks.selectResult = [{ id: 'r1', status: 'verworfen' }];
+		let caught: unknown;
+		try {
+			await POST(fakeEvent());
+		} catch (err) {
+			caught = err;
+		}
+		expect(isHttpError(caught, 409)).toBe(true);
+		expect((caught as { body: { message: string } }).body.message).toBe('Dieser Bon liegt im Papierkorb.');
+		expect(mocks.enqueueExtraction).not.toHaveBeenCalled();
+	});
+
+	it('sagt bei einem wartenden Bon „wird gerade gelesen"', async () => {
+		mocks.returningRows = [[]];
+		mocks.selectResult = [{ id: 'r1', status: 'pending' }];
+		let caught: unknown;
+		try {
+			await POST(fakeEvent());
+		} catch (err) {
+			caught = err;
+		}
+		expect((caught as { body: { message: string } }).body.message).toBe('Dieser Bon wird gerade gelesen.');
+	});
 });

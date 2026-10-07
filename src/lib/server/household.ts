@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { count, eq } from 'drizzle-orm';
+import { and, count, eq, ne } from 'drizzle-orm';
 import { db } from './db';
 import { households, users, householdMembers, receipts } from './db/schema';
 
@@ -114,8 +114,8 @@ export async function mitgliedschaftWiederherstellen(
  * Nutzer denselben Haushalt (Backfill aus Aufgabe 1/2) — aendert sich das je einmal,
  * ist `household_members` die Spalte, der zu glauben ist.
  */
-export async function mitgliederMitZaehlung(householdId: string) {
-	return db
+export async function mitgliederMitZaehlung(householdId: string, d: typeof db = db) {
+	return d
 		.select({
 			id: users.id,
 			displayName: users.displayName,
@@ -124,7 +124,13 @@ export async function mitgliederMitZaehlung(householdId: string) {
 		})
 		.from(users)
 		.leftJoin(householdMembers, eq(householdMembers.userId, users.id))
-		.leftJoin(receipts, eq(receipts.uploadedBy, users.id))
+		// Nur Bons DIESES Haushalts und nicht aus dem Papierkorb (2.4); ein Doppel zaehlt, er ist
+		// ein erfasster Bon. Die Bedingungen stehen im Verbund, nicht im WHERE — sonst fiele ein
+		// Mitglied ohne Bons ganz aus der Liste.
+		.leftJoin(
+			receipts,
+			and(eq(receipts.uploadedBy, users.id), eq(receipts.householdId, householdId), ne(receipts.status, 'verworfen'))
+		)
 		.where(eq(householdMembers.householdId, householdId))
 		.groupBy(users.id);
 }

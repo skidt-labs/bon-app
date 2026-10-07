@@ -1,6 +1,7 @@
 import { createHash, randomInt } from 'node:crypto';
 import { eq } from 'drizzle-orm';
 import { db } from '../db';
+import { pgCode, pgConstraint } from '../db/fehler';
 import { matrixPairingCodes, matrixPairingAttempts, matrixLinks, householdMembers } from '../db/schema';
 
 /**
@@ -182,10 +183,9 @@ export async function codeEinloesen(
 function eindeutigkeitsGrund(
 	err: unknown
 ): 'schon_verknuepft' | 'konto_schon_gekoppelt' | undefined {
-	if (!err || typeof err !== 'object' || (err as { code?: unknown }).code !== '23505') {
-		return undefined;
-	}
-	const constraint = (err as { constraint?: unknown }).constraint;
+	// N1 (Sammelfassung 0.11.0): drizzle reicht den pg-Fehler eine Ebene tiefer weiter.
+	if (pgCode(err) !== '23505') return undefined;
+	const constraint = pgConstraint(err);
 	if (constraint === 'matrix_links_matrix_user_id_unique') return 'schon_verknuepft';
 	if (constraint === 'matrix_links_user_id_unique') return 'konto_schon_gekoppelt';
 	return undefined;

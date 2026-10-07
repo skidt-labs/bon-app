@@ -113,16 +113,25 @@ export async function enqueueExtraction(receiptId: string, opts: { ohneVorpruefu
 }
 
 /**
- * Ein Bericht in den eigenen Matrix-Direktchat. Wenige Wiederholungen (Synapse kurz weg),
- * und ein Auftrag je Nutzer und 30 Sekunden: wer zweimal tippt, bekommt eine Nachricht.
+ * Ein Bericht in den eigenen Matrix-Direktchat. Wenige Wiederholungen (Synapse kurz weg).
+ *
+ * Doppeltipp-Schutz: pg-boss nimmt je Nutzer hoechstens EINEN Auftrag je FESTEM
+ * 30-Sekunden-Fenster an — `singletonSeconds` rechnet in Fenstern ab der vollen halben
+ * Minute, nicht ab dem ersten Tipp. Zwei Tipps ueber eine Fenstergrenze ergeben also zwei
+ * Nachrichten; dagegen sperrt die Seite den Knopf, solange gesendet wird. Auch ein ANDERER
+ * Bericht im selben Fenster wird nicht angenommen — dann liefert diese Funktion false, und
+ * die Seite sagt es (Sammelfassung 3.11).
+ *
+ * @returns true = eingereiht; false = in diesem Fenster lag schon ein Auftrag des Nutzers.
  */
-export async function enqueueMatrixBericht(job: MatrixBerichtJob): Promise<void> {
+export async function enqueueMatrixBericht(job: MatrixBerichtJob): Promise<boolean> {
 	const boss = await getBoss();
-	await boss.send(QUEUE_MATRIX_BERICHT, job, {
+	const id = await boss.send(QUEUE_MATRIX_BERICHT, job, {
 		retryLimit: 3,
 		retryDelay: 60,
 		expireInSeconds: 300,
 		singletonKey: job.userId,
 		singletonSeconds: 30
 	});
+	return id !== null;
 }

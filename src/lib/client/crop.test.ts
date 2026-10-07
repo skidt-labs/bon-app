@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { boundingBox, clampQuad, defaultQuad } from './crop';
+import { boundingBox, clampQuad, defaultQuad, istKonvex, zugErlaubt } from './crop';
 import type { Quad } from './crop';
 
 const quad: Quad = [
@@ -39,5 +39,38 @@ describe('defaultQuad', () => {
 		const q = defaultQuad(200, 400);
 		expect(q[1].x).toBeGreaterThan(q[0].x);
 		expect(q[3].y).toBeGreaterThan(q[0].y);
+	});
+});
+
+describe('istKonvex', () => {
+	it('nimmt ein ordentliches Viereck im Uhrzeigersinn', () => {
+		expect(istKonvex(defaultQuad(200, 400))).toBe(true);
+		expect(istKonvex(quad)).toBe(true);
+	});
+	it('lehnt eine nach innen gezogene Ecke ab', () => {
+		expect(istKonvex([{ x: 150, y: 300 }, quad[1], quad[2], quad[3]])).toBe(false);
+	});
+	// 2.14c: ueber Kreuz gezogene Ecken entzerrten das Bild gespiegelt.
+	it('lehnt ueber Kreuz liegende Ecken ab', () => {
+		expect(istKonvex([quad[1], quad[0], quad[2], quad[3]])).toBe(false);
+		expect(istKonvex([{ x: 190, y: 380 }, quad[1], quad[2], quad[3]])).toBe(false);
+	});
+	it('lehnt die gespiegelte Reihenfolge und drei Ecken auf einer Linie ab', () => {
+		expect(istKonvex([...quad].reverse() as Quad)).toBe(false);
+		expect(istKonvex([{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 200, y: 0 }, { x: 100, y: 300 }])).toBe(false);
+	});
+});
+
+describe('zugErlaubt', () => {
+	it('uebernimmt einen Zug, der das Viereck konvex laesst', () => {
+		expect(zugErlaubt(quad, [{ x: 25, y: 15 }, quad[1], quad[2], quad[3]])).toBe(true);
+	});
+	it('verwirft einen Zug, der es ueber Kreuz legen wuerde', () => {
+		expect(zugErlaubt(quad, [{ x: 190, y: 380 }, quad[1], quad[2], quad[3]])).toBe(false);
+	});
+	// Liefert die Erkennung einmal ein schiefes Viereck, muss es sich von Hand richten lassen.
+	it('laesst ein schon kaputtes Viereck reparieren', () => {
+		const kaputt: Quad = [quad[1], quad[0], quad[2], quad[3]];
+		expect(zugErlaubt(kaputt, [quad[1], { x: 60, y: 10 }, quad[2], quad[3]])).toBe(true);
 	});
 });

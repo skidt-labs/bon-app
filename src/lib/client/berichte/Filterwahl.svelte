@@ -1,8 +1,10 @@
 <script lang="ts">
+	import { afterNavigate, goto } from '$app/navigation';
 	import { formatCents } from '$lib/money';
 	import { adresse } from '$lib/berichte/zeitleiste';
 	import { merkmalParameter, ohneMerkmal, zeitraumParameter, type BerichtFilter, type Merkmal } from '$lib/berichte/filter';
 	import { MERKMAL_NAME, type FilterOption } from '$lib/berichte/merkmale';
+	import { escapeSchliesst, FILTER_KNOPF_ID, filterwahlEscape, istHandy } from './menue';
 
 	let {
 		filter,
@@ -38,17 +40,63 @@
 		{ wert: 'privat', name: 'Nur eigene private' }
 	];
 	const feld = 'rounded-xl border border-linie px-3 py-2 font-normal';
+
+	/** Am Handy ein Blatt ueber der Seite (Dialog), am Rechner ein Kasten in der Seite. */
+	let handy = $state(false);
+	let titel = $state<HTMLElement | null>(null);
+	// 1.5: am Handy fuehrt der Fokus ins Blatt, auf den Titel. afterNavigate statt onMount:
+	// die Filterwahl erscheint per Seitenwechsel, und SvelteKit setzt den Fokus danach sonst
+	// an den Seitenanfang; ausserdem bleibt sie beim Wechsel des Merkmals stehen.
+	afterNavigate(() => {
+		handy = istHandy();
+		if (handy) titel?.focus();
+	});
+
+	/** Schliessen ohne Sprung nach oben; der Fokus geht an „+ Filter" zurueck (1.3). */
+	async function zu() {
+		await goto(schliessen, { keepFocus: true, noScroll: true });
+		document.getElementById(FILTER_KNOPF_ID)?.focus();
+	}
+
+	function beiTaste(e: KeyboardEvent) {
+		if (e.key !== 'Escape' || !escapeSchliesst(e.target, e.defaultPrevented)) return;
+		e.preventDefault();
+		// 1.3: das erste Escape leert eine Suche, erst das naechste schliesst.
+		if (filterwahlEscape(suche) === 'leeren') suche = '';
+		else void zu();
+	}
 </script>
 
+<svelte:window onkeydown={beiTaste} />
+
 <!-- Nur am Handy: Seite abdunkeln; Tippen daneben schliesst (derselbe Link wie ✕). -->
-<a href={schliessen} class="fixed inset-0 z-40 bg-tinte/40 sm:hidden" aria-hidden="true" tabindex="-1"></a>
+<a
+	href={schliessen}
+	class="fixed inset-0 z-40 bg-tinte/40 sm:hidden"
+	aria-hidden="true"
+	tabindex="-1"
+	onclick={(e) => {
+		e.preventDefault();
+		void zu();
+	}}
+></a>
 <section
 	class="fixed inset-x-0 bottom-0 z-50 max-h-[85dvh] overflow-y-auto overscroll-contain rounded-t-2xl bg-papier p-4 shadow-[0_-8px_30px_rgba(17,26,59,0.18)] sm:static sm:mb-4 sm:max-h-none sm:rounded-2xl sm:shadow-[0_0_0_1px_var(--color-linie)]"
-	aria-label="Filter {MERKMAL_NAME[wahl]}"
+	role={handy ? 'dialog' : 'region'}
+	aria-modal={handy ? 'true' : undefined}
+	aria-labelledby="filterwahl-titel"
 >
 	<div class="mb-3 flex items-center justify-between">
-		<h2 class="text-[15px] font-extrabold">Filter: {MERKMAL_NAME[wahl]}</h2>
-		<a href={schliessen} aria-label="Schließen" class="grid h-11 w-11 place-items-center rounded-full border border-linie text-[15px]">✕</a>
+		<h2 id="filterwahl-titel" bind:this={titel} tabindex="-1" class="text-[15px] font-extrabold outline-none">Filter: {MERKMAL_NAME[wahl]}</h2>
+		<a
+			href={schliessen}
+			aria-label="Schließen"
+			class="grid h-11 w-11 place-items-center rounded-full border border-linie text-[15px]"
+			onclick={(e) => {
+				e.preventDefault();
+				void zu();
+			}}>✕</a
+		>
 	</div>
 	<form
 		method="GET"

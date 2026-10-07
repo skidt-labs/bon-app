@@ -1,9 +1,10 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { receipts } from '$lib/server/db/schema';
-import { storeReceiptImage } from '$lib/server/storage/images';
+import { storeReceiptImage, loescheBilder, istSystemfehler } from '$lib/server/storage/images';
 import { enqueueExtraction } from '$lib/server/queue/boss';
 import { nutzerZuMatrixId } from '$lib/server/matrix/links';
+import { pgCode, pgConstraint } from '$lib/server/db/fehler';
 
 /**
  * Synapse ist auf `max_upload_size: 512M` konfiguriert (für Dateifreigabe im Team).
@@ -94,12 +95,14 @@ export type AufnahmeDeps = {
 		matrixEventId: string;
 	}) => Promise<string>;
 	markiereFehlgeschlagen: (receiptId: string, grund: string) => Promise<void>;
+	loescheBilder: typeof loescheBilder;
 };
 
 const echteDeps: AufnahmeDeps = {
 	nutzerZuMatrixId,
 	storeReceiptImage,
 	enqueueExtraction,
+	loescheBilder,
 	async findeBonZuEreignis(eventId) {
 		const [zeile] = await db
 			.select({ id: receipts.id })
@@ -172,7 +175,8 @@ export async function nimmBildAuf(
 		// einen `.code` wie 'ENOSPC'/'EACCES'/'EROFS'; ein sharp-Dekodierfehler ist ein
 		// gewöhnlicher `Error` ohne dieses Feld — das unterscheidet zuverlässig
 		// zwischen "unser Speicher" und "sein Bild".
-		if (istSystemFehler(err)) {
+		// Die Pruefung ist seit Sammelfassung N2 dieselbe wie beim Hochladen: istSystemfehler in storage/images.ts.
+		if (istSystemfehler(err)) {
 			console.error('[matrix/ingest] Bildspeicherung fehlgeschlagen (Systemfehler, kein Bildproblem)', err);
 			return { art: 'fehler', grund: err instanceof Error ? err.message : String(err) };
 		}
@@ -193,6 +197,11 @@ export async function nimmBildAuf(
 			matrixEventId: bild.eventId
 		});
 	} catch (err) {
+		// Sammelfassung 4.2: Der Bon ist nicht angelegt — auf die gerade abgelegten Dateien zeigt
+		// keine Zeile, auch beim Ereignis-Konflikt nicht (der schnellere Aufruf hat seine eigenen
+		// gespeichert). Ohne dieses Loeschen blieben sie verwaist liegen; einen Aufraeumer im
+		// Hintergrund gibt es bewusst nicht (Entscheidung 07.10.2026). loescheBilder wirft nie.
+		await d.loescheBilder([pfade.imagePath, pfade.thumbPath]);
 		// Wettlauf: ein zweiter, gleichzeitiger Aufruf für DASSELBE Ereignis (z. B.
 		// ein erneut zugestelltes /sync nach einem Neustart) kann hier ankommen,
 		// obwohl findeBonZuEreignis oben noch nichts fand — der andere Aufruf hat
@@ -264,27 +273,8 @@ export async function nimmBildAuf(
  * SQLSTATE 23505) am Namen des Constraints — dasselbe Muster wie
  * `eindeutigkeitsGrund()` in `pairing.ts`. Jede andere 23505 (z. B. ein anderer
  * Constraint) ist KEIN Ereignis-Konflikt und fällt durch auf 'fehler'.
+ * N1 (Sammelfassung 0.11.0): auch hinter `DrizzleQueryError` (db/fehler.ts).
  */
 function istEreignisKonflikt(err: unknown): boolean {
-	if (!err || typeof err !== 'object' || (err as { code?: unknown }).code !== '23505') {
-		return false;
-	}
-	return (err as { constraint?: unknown }).constraint === 'receipts_matrix_event_id_unique';
-}
-
-/**
- * W4 (Korrekturrunde 2): unterscheidet einen Node-Dateisystemfehler (ENOSPC, EACCES,
- * EROFS, EMFILE, …) von einem gewöhnlichen sharp-Dekodierfehler. Node setzt bei
- * Systemfehlern zuverlässig `.code` auf einen dieser Errno-Namen; sharp wirft bei
- * einem kaputten/unbrauchbaren Bild einen reinen `Error` ohne dieses Feld — verifiziert
- * gegen die installierte sharp-Fassung (kein `.code` bei "Input buffer contains
- * unsupported image format" & Co.). Keine abschliessende Liste der Errno-Codes nötig:
- * jedes `.code`, das wie ein Errno aussieht (Grossbuchstaben, mit E beginnend), ist ein
- * Systemfehler — ein neuer, hier nicht bedachter Errno-Code fiele also auf der
- * sicheren Seite (Alarm + 'fehler') und nicht auf der stillen (kein_bild) durch.
- */
-function istSystemFehler(err: unknown): boolean {
-	if (!err || typeof err !== 'object') return false;
-	const code = (err as { code?: unknown }).code;
-	return typeof code === 'string' && /^E[A-Z]+$/.test(code);
+	return pgCode(err) === '23505' && pgConstraint(err) === 'receipts_matrix_event_id_unique';
 }

@@ -29,38 +29,28 @@ function baseDir(): string {
 }
 
 /**
- * Node-Dateisystemfehler (voller Speicher, fehlende Rechte, ...) tragen eine
- * `.code`-Eigenschaft. sharp wirft bei einem kaputten/unlesbaren Bild dagegen einen
- * gewoehnlichen `Error` OHNE dieses Feld — der Fehlertext selbst ist keine stabile
- * Schnittstelle zum Auswerten (sharp gibt keine Garantie auf Wortlaut oder Sprache).
- * Der Unterschied entscheidet ueber Leben und Tod des Fotos: die Outbox
- * (src/lib/client/outbox.ts, PERMANENTLY_REJECTED) loescht ihre einzige Kopie bei
- * einem endgueltigen 422 — bei einem Systemfehler ist am Bild nichts kaputt, nur die
- * Infrastruktur hakt gerade, und das Foto muss erhalten bleiben (Befund R03).
+ * Systemfehler oder unbrauchbares Bild? Die EINE Pruefung dafuer (Sammelfassung N2) — fuer das
+ * Hochladen, „Bild bearbeiten" und die Fotos aus Matrix (src/matrix/ingest.ts).
  *
- * Bewusst eine feste Liste bekannter Codes statt einer Mustererkennung ("beginnt mit
- * E"): ein unbekannter Code gilt im Zweifel NICHT als Systemfehler. Ein zu Unrecht
- * angenommener Dekodierfehler kostet ein unnoetiges 422 (Foto weg, aber wenigstens
- * kein haengenbleibender 5xx); ein zu Unrecht angenommener Systemfehler koennte einen
- * Client dagegen dauerhaft denselben unlesbaren Upload wiederholen lassen.
+ * Node setzt bei jedem Fehler des Betriebssystems `.code` auf einen Errno-Namen (ENOSPC,
+ * EACCES, ESTALE, …). sharp wirft bei einem kaputten/unlesbaren Bild einen gewoehnlichen
+ * `Error` OHNE dieses Feld — der Fehlertext selbst ist keine stabile Schnittstelle (sharp
+ * garantiert weder Wortlaut noch Sprache). Ausser sharp ruft `storeReceiptImage` nur
+ * mkdir/writeFile: ein Errno-Code heisst dort also immer „unser Speicher", nie „sein Bild".
+ *
+ * Der Unterschied entscheidet ueber Leben und Tod des Fotos: die Outbox
+ * (src/lib/client/outbox.ts, PERMANENTLY_REJECTED) loescht ihre einzige Kopie bei einem
+ * endgueltigen 422 (Befund R03); im Bot hiesse ein falsches 'kein_bild', dem Nutzer sein Bild
+ * vorzuwerfen, und es gaebe keinen Alarm. Deshalb das Muster statt der frueheren festen
+ * Liste: ein hier nicht bedachter Code faellt auf die sichere Seite (503 bzw. 'fehler' mit
+ * Alarm). Die alte Sorge, ein Client koennte dann ein unlesbares Bild endlos wiederholen,
+ * trifft nicht zu — ein unlesbares Bild traegt keinen Errno-Code. Node-eigene Codes wie
+ * `ERR_INVALID_ARG_TYPE` (Unterstrich) sind Programmierfehler und fallen nicht darunter.
  */
-const SYSTEM_FEHLERCODES = new Set([
-	'ENOSPC', // Platte voll
-	'EACCES', // Schreibrechte fehlen
-	'EROFS', // Dateisystem nur lesend eingehaengt
-	'EDQUOT', // Kontingent (Quota) ausgeschoepft
-	'EIO', // Ein-/Ausgabefehler auf dem Datentraeger
-	'EMFILE', // Zu viele offene Dateien (Prozess)
-	'ENFILE', // Zu viele offene Dateien (System)
-	'ENOENT', // Zielverzeichnis/-pfad verschwunden (z. B. Mount ausgehaengt)
-	'EPERM', // Vorgang nicht erlaubt (z. B. unveraenderliches Verzeichnis)
-	'ENOTDIR' // Ein Pfadteil ist keine Verzeichnis — Fehlkonfiguration von RECEIPT_DIR
-]);
-
 export function istSystemfehler(err: unknown): boolean {
 	if (typeof err !== 'object' || err === null) return false;
 	const code = (err as { code?: unknown }).code;
-	return typeof code === 'string' && SYSTEM_FEHLERCODES.has(code);
+	return typeof code === 'string' && /^E[A-Z]+$/.test(code);
 }
 
 /**

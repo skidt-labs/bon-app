@@ -447,4 +447,29 @@ describe('POST /api/receipts/[id]/confirm', () => {
 		const itemUpdate = mocks.updateCalls.filter((c) => c.table === receiptItems)[1];
 		expect(itemUpdate?.set).toMatchObject({ corrected: true, totalPriceCents: 119 });
 	});
+
+	// 2.2: ein verworfener Bon hiess hier „wird gerade ausgelesen".
+	it('nennt beim Bon im Papierkorb den Papierkorb', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'verworfen' }];
+		let caught: unknown;
+		try {
+			await POST(fakeEvent(rumpf()));
+		} catch (err) {
+			caught = err;
+		}
+		expect(isHttpError(caught, 409)).toBe(true);
+		expect((caught as { body: { message: string } }).body.message).toBe('Dieser Bon liegt im Papierkorb.');
+		expect(mocks.updateCalls).toHaveLength(0);
+	});
+
+	it('sagt bei einem Bon im Lesen „wird gerade gelesen"', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'extracting' }];
+		let caught: unknown;
+		try {
+			await POST(fakeEvent(rumpf()));
+		} catch (err) {
+			caught = err;
+		}
+		expect((caught as { body: { message: string } }).body.message).toBe('Dieser Bon wird gerade gelesen.');
+	});
 });

@@ -1,9 +1,11 @@
-import { and, count, eq, isNull, or } from 'drizzle-orm';
+import { and, count, eq, isNull, ne, or } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import { categories, receiptItems, receipts } from '$lib/server/db/schema';
 import { SONSTIGES_UNSORTIERT_SLUG } from './baum';
 import { bonEinsortieren, type EinsortierErgebnis } from './einsortieren';
 import type { ModellDeps } from './modell';
+
+type Verbindung = typeof db;
 
 /**
  * Der Nachlauf ueber den Bestand: Bons, die schon da waren, bevor es die Kaskade gab,
@@ -26,11 +28,11 @@ export type NachlaufBericht = {
 	verworfeneSlugs: Record<string, number>;
 };
 
-export async function offeneBons(householdId?: string): Promise<string[]> {
+export async function offeneBons(householdId?: string, d: Verbindung = db): Promise<string[]> {
 	// Dieselbe Auswahl wie in bonEinsortieren: ohne Kategorie, oder auf „Unsortiert"
 	// gefallen ohne Quelle. Eine andere Auswahl hier hiesse, Bons zu besuchen, an denen
 	// es nichts zu tun gibt — oder welche auszulassen, an denen es etwas gaebe.
-	const [u] = await db
+	const [u] = await d
 		.select({ id: categories.id })
 		.from(categories)
 		.where(eq(categories.slug, SONSTIGES_UNSORTIERT_SLUG));
@@ -40,11 +42,12 @@ export async function offeneBons(householdId?: string): Promise<string[]> {
 				and(eq(receiptItems.categoryId, u.id), isNull(receiptItems.categorySource))
 			)
 		: isNull(receiptItems.categoryId);
-	const zeilen = await db
+	const zeilen = await d
 		.selectDistinct({ id: receipts.id })
 		.from(receipts)
 		.innerJoin(receiptItems, eq(receiptItems.receiptId, receipts.id))
-		.where(householdId ? and(eq(receipts.householdId, householdId), offen) : offen)
+		// Bons im Papierkorb zaehlen nirgends — fuer sie fragte der Nachlauf sonst das Modell (2.4).
+		.where(and(offen, ne(receipts.status, 'verworfen'), householdId ? eq(receipts.householdId, householdId) : undefined))
 		.orderBy(receipts.id);
 	return zeilen.map((z) => z.id);
 }
@@ -80,11 +83,12 @@ export async function nachlaufStarten(
 }
 
 /** Wie viele Positionen ueberhaupt noch ohne Kategorie sind — fuer Vorher/Nachher. */
-export async function ohneKategorie(): Promise<number> {
-	const [{ n }] = await db
+export async function ohneKategorie(d: Verbindung = db): Promise<number> {
+	const [{ n }] = await d
 		.select({ n: count() })
 		.from(receiptItems)
-		.where(isNull(receiptItems.categoryId));
+		.innerJoin(receipts, eq(receipts.id, receiptItems.receiptId))
+		.where(and(isNull(receiptItems.categoryId), ne(receipts.status, 'verworfen')));
 	return Number(n);
 }
 

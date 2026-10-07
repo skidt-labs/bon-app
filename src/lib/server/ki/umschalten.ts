@@ -15,6 +15,7 @@ import {
 	type TextModellZiel
 } from '$lib/server/extraction/ocr-text-provider';
 import type { Preise } from './preise';
+import { RESERVE_MINDEST_REST_MS } from '$lib/server/queue/fristen';
 
 /**
  * HTTP-Codes, die „der Mac ist gerade nicht da" heissen: beschaeftigt (503, 429) — und die
@@ -76,6 +77,31 @@ export type UmschaltDeps = {
 	frage?: typeof frageTextModell;
 };
 
+/**
+ * 4.5 (Sammelfassung 0.11.0): Bliebe der Reserve weniger als RESERVE_MINDEST_REST_MS, waere der
+ * Versuch verloren (sie bekaeme nur einen Bruchteil ihres Zeitlimits). Ein TimeoutError ist fuer
+ * den Worker voruebergehend; umgeschaltet ist schon, und der Neuversuch liest gleich zu Beginn
+ * ueber die Reserve. Nach einem vollen Mac-Zeitlimit bleibt nie genug — nach „keine Verbindung" schon.
+ */
+function zuWenigRestzeit(restMs: number): DOMException {
+	return new DOMException(
+		`Nur noch ${Math.floor(restMs / 1000)} s im Auftrag — die Reserve liest beim nächsten Versuch.`,
+		'TimeoutError'
+	);
+}
+
+/**
+ * 4.5: Die Frist endete, WAEHREND die Reserve las (ihr Signal endet an der Frist). Die Reserve ist
+ * nicht gestoert — ohne diese Unterscheidung hiesse der Worker-Alarm „Reserve nicht nutzbar
+ * (Zeitüberschreitung)". Ebenfalls ein TimeoutError: voruebergehend, der Neuversuch liest dort.
+ */
+function fristUm(): DOMException {
+	return new DOMException(
+		'Die Frist des Auftrags endete, während die Reserve las — sie liest beim nächsten Versuch.',
+		'TimeoutError'
+	);
+}
+
 export function modellAufrufMitReserve(
 	haupt: Leser,
 	reserve: Leser,
@@ -83,7 +109,7 @@ export function modellAufrufMitReserve(
 	merke: (l: Leser) => void
 ): TextModellAufruf {
 	const frage = deps.frage ?? frageTextModell;
-	return async (text, qualitaet, signal) => {
+	return async (text, qualitaet, signal, frist) => {
 		// Vor dem Aufruf merken: scheitert er, traegt auch der Fehlschlag-Lauf die richtige Rolle.
 		const lies = (l: Leser) => {
 			merke(l);
@@ -92,12 +118,17 @@ export function modellAufrufMitReserve(
 		// Was die Reserve nicht ueber die ANTWORT sagt (Netz, Zeit, HTTP), ist ihre Stoerung, nicht
 		// die des Bons. Eine Antwort, die nicht passt, und ein Abbruch von aussen bleiben, was sie sind.
 		const liesReserve = async () => {
+			const rest = frist?.restMs();
+			if (rest !== undefined && rest < RESERVE_MINDEST_REST_MS) throw zuWenigRestzeit(rest);
 			try {
 				return await lies(reserve);
 			} catch (err) {
 				const zurAntwort = err instanceof ExtractionSchemaError || err instanceof ExtractionTruncatedError;
 				const vonAussen = err instanceof DOMException && err.name === 'AbortError';
 				if (zurAntwort || vonAussen || err instanceof KiKonfigurationFehler) throw err;
+				// 4.5: TimeoutError UND die Frist ist um (1 s Spielraum fuer den Takt der Uhr) — dann hat
+				// die Frist abgebrochen, nicht das Zeitlimit der Reserve-Karte.
+				if (err instanceof DOMException && err.name === 'TimeoutError' && frist && frist.restMs() < 1000) throw fristUm();
 				if (istNichtErreichbar(err) || err instanceof ExtractionHttpError) {
 					throw new ReserveGestoert(`Reserve „${reserve.name}" nicht nutzbar (${grundText(err)}) — der Bon wartet auf den Mac.`, { cause: err });
 				}

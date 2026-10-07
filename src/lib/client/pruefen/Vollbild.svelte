@@ -1,5 +1,6 @@
 <script lang="ts">
 	import Bonbild from './Bonbild.svelte';
+	import { dialog } from '$lib/client/dialog';
 	import type { OcrZeileKurz } from '$lib/server/ocr/anbieter';
 
 	let {
@@ -25,9 +26,7 @@
 	 */
 </script>
 
-<svelte:window onkeydown={(e) => e.key === 'Escape' && onschliessen()} />
-
-<div class="fixed inset-0 z-50 flex flex-col bg-tinte/95" role="dialog" aria-modal="true" aria-label="Bon im Vollbild">
+<div class="fixed inset-0 z-50 flex flex-col bg-tinte/95" role="dialog" aria-modal="true" aria-label="Bon im Vollbild" use:dialog={{ onschliessen, gesperrt: false }}>
 	<div
 		class="flex items-center justify-between px-4 text-papier"
 		style="padding-top: calc(env(safe-area-inset-top, 0px) + 10px); padding-bottom: 10px"
@@ -36,6 +35,7 @@
 		<button
 			type="button"
 			class="rounded-xl border border-papier/30 px-3.5 py-1.5 text-[13px] font-bold"
+			data-autofocus
 			onclick={onschliessen}>Schließen</button
 		>
 	</div>

@@ -1,11 +1,11 @@
 import { formatCents } from '$lib/money';
-import { filterAlsAdresse, filterAusAdresse, hatFilter, ohneFilter, zeitraumTage, type BerichtFilter, type Zeitraum } from './filter';
+import { FRUEHESTES_JAHR, filterAlsAdresse, filterAusAdresse, hatFilter, ohneFilter, zeitraumTage, type BerichtFilter, type Zeitraum } from './filter';
 import {
 	ersterTag, jahrVon, jahrePlus, letzterTag, monatPlus, monatVon, monatsKurz, monatsName, tagName,
 	tagPlus, tageZwischen
 } from './kalender';
 
-/** null = im Vergleichszeitraum liegt kein bestaetigter Bon; das ist KEIN 0 %. */
+/** null = im Vergleichszeitraum liegt kein (passender) bestaetigter Bon; das ist KEIN 0 %. */
 export type Vergleich = { bezeichnung: string; cents: number | null; prozent: number | null };
 export type VergleichsRaum = { bezeichnung: string; von: string; bis: string };
 
@@ -144,11 +144,43 @@ export function jahresAuswahl(heute: string, summen: Record<string, number>): nu
 	return Array.from({ length: laufend - fruehestes + 1 }, (_, i) => laufend - i);
 }
 
-export function vergleichText(v: Vergleich): string {
-	if (v.cents === null) return `Kein Vergleich zu ${v.bezeichnung} — dort liegt kein bestätigter Bon`;
+/**
+ * Der Satz zu einem Vergleich. Liegt im Vergleichszeitraum nichts, sagt er, WAS dort fehlt —
+ * passend zum Filter wie leerText: unter einem Filter kann es dort sehr wohl bestaetigte
+ * Bons geben, nur keine passenden (Sammelfassung 3.2).
+ */
+export function vergleichText(v: Vergleich, f: BerichtFilter): string {
+	if (v.cents === null) {
+		const welcher = hatFilter(f) ? 'kein passender' : f.umfang === 'meine' ? 'kein eigener' : 'kein';
+		return `Kein Vergleich zu ${v.bezeichnung} — dort liegt ${welcher} bestätigter Bon`;
+	}
 	if (v.prozent === null) return `Kein Prozentwert zu ${v.bezeichnung} (${formatCents(v.cents)} €)`;
 	const zeichen = v.prozent > 0 ? '+' : v.prozent < 0 ? '−' : '±';
 	return `${zeichen}${Math.abs(v.prozent)} % zu ${v.bezeichnung}`;
+}
+
+/**
+ * Die EINE Farbklasse einer Vergleichszeile: mehr ausgegeben rot, weniger tuerkis, sonst
+ * gedaempft. Die Farbe ist Zugabe — Vorzeichen und Wort stehen im Text (Sammelfassung 3.4).
+ */
+export function vergleichKlasse(v: Vergleich): 'text-rot-dunkel' | 'text-tuerkis-dunkel' | 'text-gedaempft' {
+	if (v.prozent !== null && v.prozent > 0) return 'text-rot-dunkel';
+	if (v.prozent !== null && v.prozent < 0) return 'text-tuerkis-dunkel';
+	return 'text-gedaempft';
+}
+
+/**
+ * Wohin „‹" und „›" der Zeitwahl fuehren: derselbe Monat im Vor- bzw. Folgejahr des
+ * gezeigten Kachel-Jahres — ohne JavaScript ein echter Link, mit JavaScript blaettert der
+ * Knopf nur die Kacheln (Sammelfassung 3.5). Kein Ziel vor FRUEHESTES_JAHR und nach dem
+ * laufenden Jahr; in der Zukunft endet es beim laufenden Monat.
+ */
+export function zeitwahlJahrZiel(monat: string, jahr: number, schritt: -1 | 1, heute: string): Zeitraum | null {
+	const ziel = jahr + schritt;
+	if (ziel < FRUEHESTES_JAHR || ziel > jahrVon(heute)) return null;
+	const kandidat = `${ziel}-${monat.slice(5, 7)}`;
+	const laufend = monatVon(heute);
+	return { art: 'monat', monat: kandidat > laufend ? laufend : kandidat };
 }
 
 /** Ein Link auf eine Berichtsseite mit diesem Filter. */

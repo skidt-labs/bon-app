@@ -3,6 +3,7 @@
 	import { MERKMALE, ohneFilter, ohneMerkmal, type BerichtFilter } from '$lib/berichte/filter';
 	import { aktiveMerkmale, merkmalText, MERKMAL_NAME, type FilterNamen } from '$lib/berichte/merkmale';
 	import Aufklapper from './Aufklapper.svelte';
+	import { FILTER_KNOPF_ID } from './menue';
 
 	let {
 		filter,
@@ -36,6 +37,7 @@
 		     absolut gesetztes Menue abschneiden. -->
 		<Aufklapper
 			titel="Filter hinzufügen"
+			knopfId={FILTER_KNOPF_ID}
 			klasse="relative shrink-0"
 			breite="sm:w-52"
 			knopfKlasse="block rounded-full border border-linie bg-papier px-3 py-1.5 whitespace-nowrap"

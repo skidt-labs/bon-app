@@ -8,6 +8,10 @@ export const POST: RequestHandler = async ({ params, request, locals }) => {
 	if (!locals.user) error(401, 'Nicht angemeldet');
 	const rumpf = (await request.json().catch(() => ({}))) as { bestaetigtWegnehmen?: unknown } | null;
 	const r = await inPapierkorbLegen(db, locals.zugriff!, params.id, rumpf?.bestaetigtWegnehmen === true);
-	if (!r.ok) error(r.status, r.meldung);
+	if (!r.ok) {
+		// Die Kennung braucht einen eigenen Rumpf: error() traegt nur App.Error ({ message }).
+		if (r.brauchtRueckfrage) return json({ message: r.meldung, brauchtRueckfrage: true }, { status: r.status });
+		error(r.status, r.meldung);
+	}
 	return json({ ok: true });
 };

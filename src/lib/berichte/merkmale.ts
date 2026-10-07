@@ -31,16 +31,23 @@ export function aktiveMerkmale(f: BerichtFilter): Merkmal[] {
 	});
 }
 
-export function merkmalText(f: BerichtFilter, m: Merkmal, namen: FilterNamen): string {
+/** Namen einer Liste; mit `hoechstens` nur die ersten, dann „und N weitere" (Sammelfassung 3.10). */
+function aufzaehlen(namen: string[], hoechstens?: number): string {
+	// Bei genau EINEM uebrigen Namen spart „und 1 weitere" nichts — dann alle.
+	if (hoechstens === undefined || namen.length <= hoechstens + 1) return namen.join(', ');
+	return `${namen.slice(0, hoechstens).join(', ')} und ${namen.length - hoechstens} weitere`;
+}
+
+export function merkmalText(f: BerichtFilter, m: Merkmal, namen: FilterNamen, hoechstens?: number): string {
 	switch (m) {
 		case 'laden':
-			return `Laden: ${f.laden.map((id) => (id === LADEN_UNBEKANNT ? 'Laden unbekannt' : (namen.laden[id] ?? 'unbekannter Laden'))).join(', ')}`;
+			return `Laden: ${aufzaehlen(f.laden.map((id) => (id === LADEN_UNBEKANNT ? 'Laden unbekannt' : (namen.laden[id] ?? 'unbekannter Laden'))), hoechstens)}`;
 		case 'kategorie':
-			return `Kategorie: ${f.kategorie.map((s) => (s === UNSORTIERT ? 'Ohne Kategorie' : (namen.kategorie[s] ?? s))).join(', ')}`;
+			return `Kategorie: ${aufzaehlen(f.kategorie.map((s) => (s === UNSORTIERT ? 'Ohne Kategorie' : (namen.kategorie[s] ?? s))), hoechstens)}`;
 		case 'person':
-			return `Person: ${f.person.map((id) => namen.person[id] ?? 'unbekannt').join(', ')}`;
+			return `Person: ${aufzaehlen(f.person.map((id) => namen.person[id] ?? 'unbekannt'), hoechstens)}`;
 		case 'topf':
-			return `Topf: ${f.topf.map((id) => namen.topf[id] ?? 'unbekannt').join(', ')}`;
+			return `Topf: ${aufzaehlen(f.topf.map((id) => namen.topf[id] ?? 'unbekannt'), hoechstens)}`;
 		case 'betrag': {
 			const b = f.betrag;
 			if (!b) return 'Betrag';
@@ -55,6 +62,6 @@ export function merkmalText(f: BerichtFilter, m: Merkmal, namen: FilterNamen): s
 	}
 }
 
-export function filterZusammenfassung(f: BerichtFilter, namen: FilterNamen): string[] {
-	return aktiveMerkmale(f).map((m) => merkmalText(f, m, namen));
+export function filterZusammenfassung(f: BerichtFilter, namen: FilterNamen, hoechstens?: number): string[] {
+	return aktiveMerkmale(f).map((m) => merkmalText(f, m, namen, hoechstens));
 }

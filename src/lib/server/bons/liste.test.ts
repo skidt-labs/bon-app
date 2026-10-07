@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { filterAusQuery, statusListe, zaehlerAus, archivStandard } from './liste';
+import { filterAusQuery, statusListe, zaehlerAus, archivStandard, bonAlsFehlgeschlagenMarkieren } from './liste';
 
 const standardPosteingang = { status: 'brauchtDich', monat: null } as const;
 
@@ -98,5 +98,17 @@ describe('zaehlerAus', () => {
 			{ status: 'verworfen', n: 3 }
 		]);
 		expect(z).toEqual({ brauchtDich: 2, wirdGelesen: 0, fehlgeschlagen: 0, bestaetigt: 0, papierkorb: 3 });
+	});
+});
+
+describe('bonAlsFehlgeschlagenMarkieren', () => {
+	// 2.11: „Doch ein Bon" setzt beim Rueckfall die Beanstandungen von vorher wieder ein.
+	it('setzt die Beanstandungen nur, wenn sie uebergeben werden', async () => {
+		const sets: unknown[] = [];
+		const d = { update: () => ({ set: (s: unknown) => ({ where: async () => void sets.push(s) }) }) } as never;
+		await bonAlsFehlgeschlagenMarkieren(d, 'r1', 'Warteschlange weg');
+		await bonAlsFehlgeschlagenMarkieren(d, 'r1', 'Warteschlange weg', ['kein_bon_leer']);
+		expect(sets[0]).toEqual({ status: 'failed', failureReason: 'Warteschlange weg' });
+		expect(sets[1]).toEqual({ status: 'failed', failureReason: 'Warteschlange weg', needsReviewReason: ['kein_bon_leer'] });
 	});
 });

@@ -50,15 +50,18 @@ describe('Die Grenze der Betreiberrolle', () => {
 		expect(suender).toEqual([]);
 	});
 
-	it('liest aus receipts ausschliesslich die Haushaltsspalte', () => {
+	it('liest aus receipts ausschliesslich Haushalt und Status', () => {
 		/*
 		 * Die schaerfere Haelfte: `receipts` zu importieren ist erlaubt, weil die
 		 * Uebersicht Bons ZAEHLEN muss. Sobald aber eine andere Spalte gelesen wird —
 		 * totalGrossCents, merchantNameRaw, imagePath —, ist es kein Zaehlerstand mehr,
 		 * sondern Inhalt. Dass ein Haushalt 340 Bons hat, darf der Betreiber wissen; was
 		 * darauf steht, geht ihn nichts an.
+		 *
+		 * `status` kam am 07.10.2026 dazu (2.4): die Übersicht nennt „davon N im Papierkorb“. Der
+		 * Status sagt, OB ein Bon zählt, nicht, was darauf steht — weiter ein Zählerstand.
 		 */
-		const erlaubt = new Set(['householdId']);
+		const erlaubt = new Set(['householdId', 'status']);
 		const suender: string[] = [];
 		for (const d of dateienIn('src/lib/server/betrieb')) {
 			for (const treffer of lies(d).matchAll(/\breceipts\.(\w+)/g)) {

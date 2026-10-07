@@ -1,8 +1,8 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1.
  * Läuft nicht in der normalen Suite (die muss ohne Datenbank auskommen).
  *
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/household.db.test.ts
  *
  * Bewacht die Eigenschaft, die seit Aufgabe 2 (18.09.2026) an die Stelle des alten
@@ -34,8 +34,9 @@
 import { describe, it, expect, afterAll } from 'vitest';
 import { count, eq, inArray, like } from 'drizzle-orm';
 import { db } from './db';
-import { households, users, householdMembers } from './db/schema';
-import { erstanmeldungAnlegen, mitgliedschaftWiederherstellen } from './household';
+import { households, users, householdMembers, receipts } from './db/schema';
+import { erstanmeldungAnlegen, mitgliedschaftWiederherstellen, mitgliederMitZaehlung } from './household';
+import { testHaushalt, zurueckgerollt } from './db/testdaten';
 import { createSession, validateSession } from './auth/session';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
@@ -199,5 +200,34 @@ describe.skipIf(!RUN)('mitgliedschaftWiederherstellen (live)', () => {
 		const sitzungDanach = await createSession(nutzer.userId);
 		const sessionUser = await validateSession(sitzungDanach.id);
 		expect(sessionUser).toMatchObject({ id: nutzer.userId, householdId, rolle: 'verwalter' });
+	});
+});
+
+describe.skipIf(!RUN)('mitgliederMitZaehlung (zurueckgerollt)', () => {
+	// 2.4: gezaehlt wurden alle Bons des Menschen — auch der Papierkorb und Bons aus einem
+	// frueheren Haushalt. Ein Doppel ist ein erfasster Bon und zaehlt.
+	it('zaehlt je Mitglied nur die Bons dieses Haushalts ausserhalb des Papierkorbs', async () => {
+		await zurueckgerollt(async (tx) => {
+			const { haushaltId, nutzerId } = await testHaushalt(tx);
+			const anderer = await testHaushalt(tx);
+			const bon = (householdId: string, status: 'confirmed' | 'doppelt' | 'verworfen') =>
+				tx.insert(receipts).values({
+					householdId,
+					uploadedBy: nutzerId,
+					imagePath: 'test/zaehlen-nicht-da.webp',
+					thumbPath: 'test/zaehlen-nicht-da.thumb.webp',
+					status,
+					verworfenAm: status === 'verworfen' ? new Date() : null
+				});
+			await bon(haushaltId, 'confirmed');
+			await bon(haushaltId, 'doppelt');
+			await bon(haushaltId, 'verworfen');
+			await bon(anderer.haushaltId, 'confirmed');
+			const hier = await mitgliederMitZaehlung(haushaltId, tx as never);
+			expect(hier.find((m) => m.id === nutzerId)?.erfasst).toBe(2);
+			// Ein Mitglied ohne Bons bleibt mit 0 in der Liste (Bedingungen im Verbund, nicht im WHERE).
+			const dort = await mitgliederMitZaehlung(anderer.haushaltId, tx as never);
+			expect(dort).toEqual([expect.objectContaining({ id: anderer.nutzerId, erfasst: 0 })]);
+		});
 	});
 });

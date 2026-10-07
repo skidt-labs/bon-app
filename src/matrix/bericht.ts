@@ -1,3 +1,5 @@
+import type { MatrixClient } from 'matrix-bot-sdk';
+import { TEXT_HOECHSTENS } from '$lib/server/berichte/zusammenfassung';
 /**
  * Zustellung einer Berichtszusammenfassung (Berichte Stufe 3). Die Web-App baut den Text
  * und legt ihn in die Warteschlange; hier wird er zugestellt — NUR in den gemerkten
@@ -5,8 +7,17 @@
  * Ein Direktchat kann nachtraeglich weitere Mitglieder bekommen (siehe links.ts); dann ist
  * er keiner mehr, und dort wird nichts gesendet.
  */
-export const TEXT_HOECHSTENS = 4000;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Wer im Raum ist ODER eingeladen wurde. Ein Eingeladener kann jederzeit beitreten und
+ * liest dann den Verlauf mit — fuer „ist das noch ein Direktchat?" zaehlt er wie ein
+ * Mitglied (Sammelfassung 3.12).
+ */
+export async function raumMitglieder(client: Pick<MatrixClient, 'getRoomMembers'>, raum: string): Promise<string[]> {
+	const ereignisse = await client.getRoomMembers(raum, undefined, ['join', 'invite']);
+	return ereignisse.map((e) => e.membershipFor);
+}
 
 export type Zustellung = 'gesendet' | 'ungueltig' | 'nicht_gekoppelt' | 'kein_chat' | 'raum_nicht_privat';
 

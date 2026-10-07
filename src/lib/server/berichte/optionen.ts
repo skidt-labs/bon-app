@@ -1,4 +1,6 @@
+import { inArray } from 'drizzle-orm';
 import { MONETAER, type LineType } from '$lib/bons/zeilenarten';
+import { merchants } from '$lib/server/db/schema';
 import type { db as Db } from '$lib/server/db';
 import { tagesgrenzen } from '$lib/server/zeit';
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
@@ -66,9 +68,18 @@ export async function filterOptionen(
 			je.set(id, s);
 		}
 		const liste = [...je.entries()].map(([id, s]) => option(id, s.name, s));
-		// Gewaehlte, die im Zeitraum nichts haben, bleiben abwaehlbar.
+		// Gewaehlte, die im Zeitraum nichts haben, bleiben abwaehlbar — beim Namen genannt
+		// (Sammelfassung 3.8). Dieselbe Abfrage wie filterAufloesen (aufloesen.ts Z. 77);
+		// die Seite uebergibt den schon aufgeloesten Filter, der Ersatzname bleibt Sicherung.
+		const namen = new Map<string, string>();
+		const fehlend = [...gewaehlt].filter((id) => id !== LADEN_UNBEKANNT && !je.has(id));
+		if (fehlend.length > 0) {
+			for (const m of await db.select({ id: merchants.id, name: merchants.name }).from(merchants).where(inArray(merchants.id, fehlend))) {
+				namen.set(m.id, m.name);
+			}
+		}
 		for (const id of gewaehlt) {
-			if (!je.has(id)) liste.push(option(id, id === LADEN_UNBEKANNT ? 'Laden unbekannt' : 'Gewählter Laden', neu()));
+			if (!je.has(id)) liste.push(option(id, id === LADEN_UNBEKANNT ? 'Laden unbekannt' : (namen.get(id) ?? 'Gewählter Laden'), neu()));
 		}
 		return liste.sort((a, b) => (a.wert === LADEN_UNBEKANNT ? 1 : b.wert === LADEN_UNBEKANNT ? -1 : nachSumme(a, b)));
 	}

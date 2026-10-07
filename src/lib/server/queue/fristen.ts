@@ -17,6 +17,19 @@
 export const AUFTRAG_VERFAELLT_SEKUNDEN = 600;
 
 /**
+ * Sammelfassung 0.11.0, 4.5: Abstand der Auftragsfrist zum Verfall. Was nach der Frist noch
+ * laeuft, sind nur Matrix-Meldungen (je MATRIX_ZEITLIMIT_MS) und Datenbank-Schreibungen —
+ * die Summe steht in fristen.test.ts.
+ */
+export const AUFTRAG_SICHERHEIT_SEKUNDEN = 60;
+
+/** Die Reserve wird nur gefragt, wenn dem Auftrag mindestens so viel bleibt. */
+export const RESERVE_MINDEST_REST_MS = 60_000;
+
+/** Die Nachfrage zu Kategorien entfaellt, wenn weniger bleibt (= ihr volles Zeitlimit). */
+export const NACHFRAGE_MINDEST_REST_MS = 120_000;
+
+/**
  * Wie viel vom Auftragsbudget der OCR-Schritt hoechstens verbrauchen darf.
  *
  * Etappe 3 (PaddleOCR): bis dahin war OCR ein Tesseract-Aufruf von rund einer Sekunde
@@ -41,4 +54,32 @@ export const MAX_OCR_ZEITLIMIT_MS = 60_000;
  *   600 s Verfall  −  60 s Abstand  −  60 s OCR  =  480 s
  */
 export const MAX_ZEITLIMIT_MS =
-	(AUFTRAG_VERFAELLT_SEKUNDEN - 60) * 1000 - MAX_OCR_ZEITLIMIT_MS;
+	(AUFTRAG_VERFAELLT_SEKUNDEN - AUFTRAG_SICHERHEIT_SEKUNDEN) * 1000 - MAX_OCR_ZEITLIMIT_MS;
+
+export type AuftragsFrist = {
+	/** Was bis zur Frist bleibt, in ms — nie negativ. */
+	restMs(): number;
+	/**
+	 * Endet, sobald der Auftrag abgebrochen wird (`jobSignal`, AbortError) oder `limitMs` bzw. die
+	 * Restzeit um sind — was zuerst kommt (TimeoutError, fuer den Worker voruebergehend).
+	 */
+	signal(limitMs: number, jobSignal?: AbortSignal): AbortSignal;
+};
+
+/**
+ * EINE Frist je Auftrag: Start + Verfall − Sicherheit (heute 540 s). Bis dahin endet alles, was ein
+ * Modell fragt. Vorher galt jede Einzelfrist fuer sich, im schlimmsten Fall zusammen ~1260 s
+ * gegen 600 s Verfall — pg-boss startete den Auftrag neu, waehrend der alte noch fragte.
+ */
+export function auftragsFrist(startMs: number, jetzt: () => number = Date.now): AuftragsFrist {
+	const ende = startMs + (AUFTRAG_VERFAELLT_SEKUNDEN - AUFTRAG_SICHERHEIT_SEKUNDEN) * 1000;
+	const restMs = () => Math.max(0, ende - jetzt());
+	return {
+		restMs,
+		signal(limitMs, jobSignal) {
+			// AbortSignal.timeout verlangt eine ganze Zahl >= 0.
+			const zeit = AbortSignal.timeout(Math.max(0, Math.floor(Math.min(limitMs, restMs()))));
+			return jobSignal ? AbortSignal.any([jobSignal, zeit]) : zeit;
+		}
+	};
+}

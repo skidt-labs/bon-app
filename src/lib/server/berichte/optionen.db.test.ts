@@ -1,7 +1,7 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1.
  *
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/berichte/optionen.db.test.ts
  *
  * Bewacht: die Vorschau der Filterauswahl („Betrag · N Bons") zaehlt private Bons anderer
@@ -15,6 +15,7 @@ import { heutigerTag } from '$lib/server/zeit';
 import { leererFilter } from '$lib/berichte/filter';
 import { monatVon } from '$lib/berichte/kalender';
 import { filterOptionen } from './optionen';
+import { zurueckgerollt, testHaushalt } from '$lib/server/db/testdaten';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
 
@@ -71,5 +72,23 @@ describe.skipIf(!RUN)('Filterauswahl: Vorschau (live)', () => {
 				throw new Error('ROLLBACK_ABSICHT');
 			})
 		).rejects.toThrow('ROLLBACK_ABSICHT');
+	});
+});
+
+// Sammelfassung 3.8: ein gewaehlter Laden ohne Bons im Zeitraum hiess „Gewählter Laden".
+describe.skipIf(!RUN)('Filterauswahl: gewaehlter Laden ohne Bons (live)', () => {
+	it('nennt ihn beim Namen und laesst ihn abwaehlbar', async () => {
+		await zurueckgerollt(async (tx) => {
+			const tdb = tx as unknown as typeof db;
+			const { k } = await testHaushalt(tx);
+			const [laden] = await tx
+				.insert(merchants)
+				.values({ name: 'Ruhiger Laden', normalizedName: `ruhiger-laden-${randomUUID()}` })
+				.returning({ id: merchants.id });
+			const monat = leererFilter({ art: 'monat', monat: monatVon(heutigerTag()) });
+			expect(await filterOptionen(tdb, k, { ...monat, laden: [laden.id] }, 'laden')).toEqual([
+				{ wert: laden.id, name: 'Ruhiger Laden', ebene: 0, cents: 0, bons: 0, gewaehlt: true }
+			]);
+		});
 	});
 });

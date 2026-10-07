@@ -74,6 +74,17 @@ describe('keinKassenbon', () => {
 	it('braucht zwei verschiedene Kartenwoerter', () => {
 		expect(keinKassenbon('Terminal 3 an der Kasse\nBetrag 5,00')).toBeNull();
 	});
+
+	// 2.13: die Schwelle „hoechstens zwei verschiedene Betraege" an beiden Seiten.
+	it('erkennt einen Kartenbeleg mit genau zwei verschiedenen Betraegen', () => {
+		const beleg = 'Kundenbeleg\ngirocard kontaktlos\nTerminal-ID 12345678\nBetrag EUR 23,40\nTrinkgeld EUR 2,00\nGenehmigung 123456';
+		expect(keinKassenbon(beleg)).toBe('kein_bon_kartenbeleg');
+	});
+
+	it('laesst einen Beleg mit drei verschiedenen Betraegen in Ruhe', () => {
+		const beleg = 'Kundenbeleg\ngirocard kontaktlos\nTerminal-ID 12345678\nBetrag EUR 23,40\nTrinkgeld EUR 2,00\nGesamt EUR 25,40\nGenehmigung 123456';
+		expect(keinKassenbon(beleg)).toBeNull();
+	});
 });
 
 describe('keinBonCode', () => {

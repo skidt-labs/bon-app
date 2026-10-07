@@ -11,8 +11,18 @@ import { gedrehteGroesse, arbeitsMassstab } from './drehen';
 /** Erkennung auf einem kleinen Abbild: schnell, und fuer den Rand reicht es. */
 export const MAX_ERKENNUNG = 320;
 
-/** Zeichnet das Foto gedreht (viertel · 90° + fein) in `ziel`; Ecken ausserhalb werden schwarz. */
-export function gedrehtZeichnen(ziel: HTMLCanvasElement, bild: HTMLImageElement, viertel: number, fein: number) {
+/** Schwarz, nicht weiss: der Bon ist hell, ein heller Rand wuerde mit ihm verschmelzen. */
+export const FUELLUNG_ERKENNUNG = '#000';
+export const FUELLUNG_AUSSCHNITT = '#fff';
+
+/** Zeichnet das Foto gedreht (viertel · 90° + fein) in `ziel`; Ecken ausserhalb in `fuellung`. */
+export function gedrehtZeichnen(
+	ziel: HTMLCanvasElement,
+	bild: HTMLImageElement,
+	viertel: number,
+	fein: number,
+	fuellung: string = FUELLUNG_ERKENNUNG
+) {
 	const grad = viertel * 90 + fein;
 	// Nach Flaeche begrenzt, mit der Drehung: ueber ~16,7 MP liefert Safari keinen Kontext mehr.
 	const f = arbeitsMassstab(bild.naturalWidth, bild.naturalHeight, grad);
@@ -23,13 +33,28 @@ export function gedrehtZeichnen(ziel: HTMLCanvasElement, bild: HTMLImageElement,
 	ziel.height = g.hoehe;
 	const ctx = ziel.getContext('2d')!;
 	ctx.save();
-	// Schwarz, nicht weiss: der Bon ist hell, ein heller Rand wuerde mit ihm verschmelzen.
-	ctx.fillStyle = '#000';
+	ctx.fillStyle = fuellung;
 	ctx.fillRect(0, 0, g.breite, g.hoehe);
 	ctx.translate(g.breite / 2, g.hoehe / 2);
 	ctx.rotate((grad * Math.PI) / 180);
 	ctx.drawImage(bild, -b / 2, -h / 2, b, h);
 	ctx.restore();
+}
+
+/**
+ * Dasselbe gedrehte Bild zum Ausschneiden, Ecken WEISS (2.14a): Nach feinem Drehen lagen sonst
+ * schwarze Keile im hochgeladenen Bon. Gleiche Rechnung wie fuer die Erkennung, also gleiche
+ * Groesse — das Viereck passt ohne Umrechnung. Der Aufrufer gibt die Leinwand danach frei.
+ */
+export function ausschnittLeinwand(
+	bild: HTMLImageElement,
+	viertel: number,
+	fein: number,
+	neu: () => HTMLCanvasElement = () => document.createElement('canvas')
+): HTMLCanvasElement {
+	const c = neu();
+	gedrehtZeichnen(c, bild, viertel, fein, FUELLUNG_AUSSCHNITT);
+	return c;
 }
 
 /** Den Bon auf dem Canvas suchen; Ecken in Canvas-Koordinaten oder null. */

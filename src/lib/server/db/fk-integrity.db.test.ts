@@ -1,5 +1,5 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1.
  * Läuft nicht in der normalen Suite (die muss ohne Datenbank auskommen).
  *
  * Bewacht drei Dinge, die Drizzle nicht ausdrücken kann und die deshalb aus
@@ -19,18 +19,13 @@
  *    Zyklen/eine dritte Ebene im Kategoriebaum (siehe dieselbe Review-Datei, Befund
  *    "Der Kategoriebaum").
  *
- *   RUN_DB_TESTS=1 npx vitest run src/lib/server/db/fk-integrity.db.test.ts
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
+ *     npx vitest run src/lib/server/db/fk-integrity.db.test.ts
  */
 import { describe, it, expect } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { psql } from './testdaten';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
-
-function psql(sql: string): string {
-  return execFileSync('docker', ['exec', 'bon-db', 'psql', '-q', '-U', 'bon', '-d', 'bon', '-tAc', sql], {
-    encoding: 'utf8'
-  }).trim();
-}
 
 describe.skipIf(!RUN)('Fremdschlüssel-Integrität (live)', () => {
   it('trägt die Spaltenliste applies_to_line', () => {

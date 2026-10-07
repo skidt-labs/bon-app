@@ -88,8 +88,9 @@ npm test          # Vitest
 npm run check     # svelte-check
 ```
 
-Tests gegen eine echte Datenbank laufen nur mit `RUN_DB_TESTS=1` und `DATABASE_URL` —
-bitte nie gegen eine Produktionsdatenbank.
+Tests gegen eine echte Datenbank laufen nur mit `RUN_DB_TESTS=1` und einer `DATABASE_URL`,
+deren Datenbankname auf `_test` endet (z. B. `bon_test`, mit `npm run db:migrate` eingerichtet).
+Sonst bricht der Testlauf ab, bevor er etwas schreibt.
 
 ## Lizenz
 

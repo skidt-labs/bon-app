@@ -7,6 +7,8 @@ import {
 	positionssumme,
 	pruefeVorBestaetigen,
 	handEingabeBegonnen,
+	kopieSchluessel,
+	selberBon,
 	type EditorZeile
 } from './editor';
 
@@ -228,5 +230,44 @@ describe('handEingabeBegonnen', () => {
 
 	it('ist wahr, wenn eine zweite Zeile dazukam', () => {
 		expect(handEingabeBegonnen(leererKopf, zeileEinfuegen(leereZeile, 0))).toBe(true);
+	});
+});
+
+describe('kopieSchluessel', () => {
+	// Zwischen „Pruefen" und „Bestaetigt" stehen womoeglich ungespeicherte Korrekturen.
+	it('bleibt bei Statuswechseln, die Korrekturen nicht beruehren', () => {
+		expect(kopieSchluessel('b1', 'review')).toBe(kopieSchluessel('b1', 'confirmed'));
+		expect(kopieSchluessel('b1', 'pending')).toBe(kopieSchluessel('b1', 'extracting'));
+	});
+	// 2.6: Wird der wartende Bon gelesen, muss die Kopie aus den neuen Daten kommen.
+	it('wechselt, wenn das Warten endet', () => {
+		expect(kopieSchluessel('b1', 'pending')).not.toBe(kopieSchluessel('b1', 'review'));
+		expect(kopieSchluessel('b1', 'extracting')).not.toBe(kopieSchluessel('b1', 'failed'));
+	});
+	// 2.11: Zurueckgeholt und auf „fehlgeschlagen" zurueckgefallen — dann gehoert die leere
+	// erste Zeile zum Eintragen hinein.
+	it('wechselt beim Zurueckholen aus dem Papierkorb', () => {
+		expect(kopieSchluessel('b1', 'verworfen')).not.toBe(kopieSchluessel('b1', 'failed'));
+		expect(kopieSchluessel('b1', 'verworfen')).not.toBe(kopieSchluessel('b1', 'review'));
+	});
+	it('wechselt mit dem Bon', () => {
+		expect(kopieSchluessel('b1', 'review')).not.toBe(kopieSchluessel('b2', 'review'));
+	});
+});
+
+describe('selberBon', () => {
+	// Review-Fokus 07.10.: Wird der wartende Bon gelesen, waehrend am Handy das Vollbild offen ist,
+	// bleibt es offen — dasselbe Foto, jetzt mit Zeilen. Der Kopie-Effekt schliesst es nur beim Bonwechsel.
+	it('gilt, wenn nur der Status desselben Bons wechselt', () => {
+		expect(selberBon(kopieSchluessel('b1', 'pending'), kopieSchluessel('b1', 'review'))).toBe(true);
+		expect(selberBon(kopieSchluessel('b1', 'extracting'), kopieSchluessel('b1', 'failed'))).toBe(true);
+		expect(selberBon(kopieSchluessel('b1', 'verworfen'), kopieSchluessel('b1', 'failed'))).toBe(true);
+	});
+	it('gilt nicht beim ersten Anzeigen und nach bewusstem Zuruecksetzen (angezeigt = "")', () => {
+		expect(selberBon('', kopieSchluessel('b1', 'review'))).toBe(false);
+	});
+	it('gilt nicht fuer einen anderen Bon, auch wenn dessen Id gleich beginnt', () => {
+		expect(selberBon(kopieSchluessel('b1', 'review'), kopieSchluessel('b2', 'review'))).toBe(false);
+		expect(selberBon(kopieSchluessel('b1', 'pending'), kopieSchluessel('b10', 'review'))).toBe(false);
 	});
 });

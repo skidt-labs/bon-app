@@ -8,7 +8,7 @@
 	import Mehr from '$lib/client/berichte/Mehr.svelte';
 	import { filterAlsAdresse, hatFilter, wirktAufPositionen } from '$lib/berichte/filter';
 	import { formatCents } from '$lib/money';
-	import { adresse, leerText, monatImZeitraum, vergleichText, zeitraumName } from '$lib/berichte/zeitleiste';
+	import { adresse, leerText, monatImZeitraum, vergleichKlasse, vergleichText, zeitraumName } from '$lib/berichte/zeitleiste';
 	import { monatsKurz, monatsName } from '$lib/berichte/kalender';
 	import type { BerichtFilter } from '$lib/berichte/filter';
 
@@ -49,7 +49,10 @@
 	<Zeitleiste filter={data.filter} heute={data.heute} pfad="/reports" monatsSummen={data.monatsSummen} {zusatz} />
 	<Filterleiste filter={data.filter} namen={data.namen} pfad="/reports" {zusatz} />
 	{#if data.wahl}
-		<Filterwahl filter={data.filter} wahl={data.wahl} optionen={data.optionen} pfad="/reports" {zusatz} />
+		<!-- Neu je Merkmal: Suchtext und Zaehler gehoeren zur Auswahl, nicht zur Seite (Sammelfassung 3.7). -->
+		{#key data.wahl}
+			<Filterwahl filter={data.filter} wahl={data.wahl} optionen={data.optionen} pfad="/reports" {zusatz} />
+		{/key}
 	{/if}
 
 	{#each data.hinweise as hinweis (hinweis)}
@@ -84,13 +87,7 @@
 				</p>
 				<!-- Vergleiche mit Vorzeichen UND Wort; die Farbe ist nur Zugabe. -->
 				{#each data.vergleiche as v (v.bezeichnung)}
-					<p
-						class="mt-1.5 text-[12.5px] text-gedaempft"
-						class:text-rot-dunkel={v.prozent !== null && v.prozent > 0}
-						class:text-tuerkis-dunkel={v.prozent !== null && v.prozent < 0}
-					>
-						{vergleichText(v)}
-					</p>
+					<p class="mt-1.5 text-[12.5px] {vergleichKlasse(v)}">{vergleichText(v, data.filter)}</p>
 				{/each}
 			</div>
 			<div class={KARTE}>

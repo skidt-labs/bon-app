@@ -1,4 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
+import { DrizzleQueryError } from 'drizzle-orm';
+import type { AuftragsFrist } from '$lib/server/queue/fristen';
 import { ExtractionSchemaError, ExtractionHttpError, ExtractionTruncatedError } from '$lib/server/extraction/types';
 import { BonUnlesbarError, OcrWerkzeugKaputtError } from '$lib/server/extraction/ocr-text-provider';
 import { BildwegNichtFreigegeben, KiSchluesselUnlesbar } from '$lib/server/ki/fehler';
@@ -130,13 +132,28 @@ describe('handleExtractJobs', () => {
     expect(d.saveResult.mock.calls[0][0].receiptId).toBe('r2');
   });
 
-  it('reicht job.signal an provider.extract weiter', async () => {
+  // 4.5 (Sammelfassung 0.11.0): extract bekommt ein Signal, das MIT dem Auftrag abbricht UND an
+  // der Auftragsfrist endet, dazu die Frist selbst. Dieselben gehen an saveResult (Kategorien).
+  it('reicht ein Signal, das mit job.signal abbricht, und die Auftragsfrist weiter', async () => {
     const controller = new AbortController();
-    const extract = vi.fn(async () => extraktionsErgebnis(extracted));
+    const extract = vi.fn(async (..._a: unknown[]) => extraktionsErgebnis(extracted));
     const d = deps({ provider: { id: 'test', model: 'test-1', extract } });
-    const j = { ...job('r1'), signal: controller.signal };
-    await handleExtractJobs([j] as never, d as never);
-    expect(extract).toHaveBeenCalledWith(expect.anything(), controller.signal, { ohneVorpruefung: false });
+    await handleExtractJobs([{ ...job('r1'), signal: controller.signal }] as never, d as never);
+
+    const [, signal, opts] = extract.mock.calls[0] as unknown as [
+      Buffer,
+      AbortSignal,
+      { ohneVorpruefung: boolean; frist: AuftragsFrist }
+    ];
+    expect(opts.ohneVorpruefung).toBe(false);
+    expect(opts.frist.restMs()).toBeGreaterThan(530_000);
+    expect(opts.frist.restMs()).toBeLessThanOrEqual(540_000);
+    expect(signal.aborted).toBe(false);
+    controller.abort();
+    expect(signal.aborted).toBe(true);
+    expect((signal.reason as DOMException).name).toBe('AbortError');
+    expect(d.saveResult.mock.calls[0][0].frist).toBe(opts.frist);
+    expect(d.saveResult.mock.calls[0][0].signal).toBe(signal);
   });
 
   // F3(a) aus der Review-Runde 1: die kompensierende markFailed-Schreibung darf
@@ -255,7 +272,7 @@ describe('handleExtractJobs — kein Kassenbon', () => {
     // Pruefung 27.09.2026: ohne Vorpruefung kann das Modell einen Bon erfinden — der Mensch
     // soll jede Zahl mit dem Bild vergleichen.
     expect(d.saveResult.mock.calls[0][0].problems).toContain('ohne_vorpruefung');
-    expect((d.provider.extract as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][2]).toEqual({ ohneVorpruefung: true });
+    expect((d.provider.extract as unknown as { mock: { calls: unknown[][] } }).mock.calls[0][2]).toMatchObject({ ohneVorpruefung: true });
   });
 
   it('prueft beim Bildweg ohne OCR-Text nichts', async () => {
@@ -327,6 +344,40 @@ describe('istVoruebergehenderFehler', () => {
   it('behandelt Schema-/Unlesbar-/Werkzeugfehler als dauerhaft', () => {
     expect(istVoruebergehenderFehler(new ExtractionSchemaError('x', {}))).toBe(false);
     expect(istVoruebergehenderFehler(new Error('irgendwas'))).toBe(false);
+  });
+});
+
+// 4.8 (Sammelfassung 0.11.0): drizzle 0.45 verpackt jeden Datenbankfehler in einen
+// DrizzleQueryError; die Einstufung sah den pg-Fehler darunter nicht. Ein kurzer
+// Datenbank-Aussetzer liess den Bon ENDGUELTIG scheitern.
+describe('istVoruebergehenderFehler — Datenbank-Aussetzer (4.8)', () => {
+  const verpackt = (code: string, text = `Datenbankfehler ${code}`) =>
+    new DrizzleQueryError('update "receipts" …', [], Object.assign(new Error(text), { code }));
+
+  it('haelt einen verpackten Verbindungsfehler fuer voruebergehend', () => {
+    expect(istVoruebergehenderFehler(verpackt('57P01'))).toBe(true);
+    expect(istVoruebergehenderFehler(verpackt('ECONNREFUSED'))).toBe(true);
+    expect(
+      istVoruebergehenderFehler(new DrizzleQueryError('select …', [], new Error('Connection terminated unexpectedly')))
+    ).toBe(true);
+  });
+
+  it('ein verpackter Eindeutigkeitsfehler bleibt dauerhaft', () => {
+    expect(istVoruebergehenderFehler(verpackt('23505'))).toBe(false);
+  });
+
+  it('wirft loadImage einen Aussetzer, bleibt der Bon in der Warteschlange', async () => {
+    const aussetzer = verpackt('08006');
+    const d = deps({ loadImage: vi.fn(async () => { throw aussetzer; }) });
+    await expect(handleExtractJobs([job('r1')] as never, d as never)).rejects.toBe(aussetzer);
+    expect(d.markFailed).not.toHaveBeenCalled();
+  });
+
+  it('wirft saveResult einen Aussetzer, ebenso', async () => {
+    const aussetzer = verpackt('40P01');
+    const d = deps({ saveResult: vi.fn(async () => { throw aussetzer; }) });
+    await expect(handleExtractJobs([job('r1')] as never, d as never)).rejects.toBe(aussetzer);
+    expect(d.markFailed).not.toHaveBeenCalled();
   });
 });
 

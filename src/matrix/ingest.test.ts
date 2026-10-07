@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DrizzleQueryError } from 'drizzle-orm';
 import {
 	nimmBildAuf,
 	MAX_BILD_BYTES,
@@ -26,6 +27,7 @@ function deps(ueber: Record<string, unknown> = {}) {
 		findeBonZuEreignis: vi.fn(async () => null),
 		legeBonAn: vi.fn(async () => 'r1'),
 		markiereFehlgeschlagen: vi.fn(async () => {}),
+		loescheBilder: vi.fn(async () => {}),
 		...ueber
 	};
 }
@@ -216,6 +218,27 @@ describe('nimmBildAuf', () => {
 		expect(findeBonZuEreignis).toHaveBeenCalledTimes(1);
 	});
 
+	// N1 (Sammelfassung 0.11.0): drizzle 0.45 reicht den pg-Fehler eine Ebene tiefer weiter
+	// (DrizzleQueryError, `cause`). istEreignisKonflikt las nur `err.code` — ein doppelt
+	// zugestelltes Foto wurde 'fehler' mit Alarm statt 'schon_bekannt'.
+	it('erkennt den Ereignis-Konflikt auch, wenn drizzle den pg-Fehler verpackt', async () => {
+		vi.spyOn(console, 'error').mockImplementation(() => {});
+		const pg = Object.assign(
+			new Error('duplicate key value violates unique constraint "receipts_matrix_event_id_unique"'),
+			{ code: '23505', constraint: 'receipts_matrix_event_id_unique' }
+		);
+		const findeBonZuEreignis = vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce('r1');
+		const d = deps({
+			findeBonZuEreignis,
+			legeBonAn: vi.fn(async () => {
+				throw new DrizzleQueryError('insert into "receipts" …', [], pg);
+			})
+		});
+		expect(await nimmBildAuf(bild(), d)).toEqual({ art: 'schon_bekannt', receiptId: 'r1' });
+		expect(findeBonZuEreignis).toHaveBeenCalledTimes(2);
+		vi.restoreAllMocks();
+	});
+
 	// W4 (Korrekturrunde 2): eine volle Platte (ENOSPC beim zweiten writeFile, dem
 	// Vorschaubild) ist KEIN Bildproblem — der Nutzer bekam bisher trotzdem "das
 	// sieht nicht nach einem lesbaren Bild aus" vorgeworfen. Node-Dateisystemfehler
@@ -232,6 +255,18 @@ describe('nimmBildAuf', () => {
 		const r = await nimmBildAuf(bild(), d);
 		expect(r.art).toBe('fehler');
 		expect(consoleErr).toHaveBeenCalled();
+		consoleErr.mockRestore();
+	});
+
+	// Sammelfassung N2: dieselbe Pruefung wie beim Hochladen (storage/images.ts).
+	it('meldet auch einen nicht eigens bedachten Errno-Code (ESTALE) als "fehler"', async () => {
+		const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+		const d = deps({
+			storeReceiptImage: vi.fn(async () => {
+				throw Object.assign(new Error('stale file handle'), { code: 'ESTALE' });
+			})
+		});
+		expect((await nimmBildAuf(bild(), d)).art).toBe('fehler');
 		consoleErr.mockRestore();
 	});
 
@@ -322,6 +357,47 @@ describe('nimmBildAuf', () => {
 		});
 		const r = await nimmBildAuf(bild(), d);
 		expect(r.art).toBe('aufgenommen_zu_klein');
+	});
+});
+
+// Sammelfassung 4.2: Scheitert das Anlegen NACH dem Ablegen der Dateien, zeigt keine Bon-Zeile
+// auf sie — ohne Loeschen blieben sie verwaist liegen (kein Aufraeumer, Entscheidung 07.10.2026).
+describe('nimmBildAuf raeumt frisch abgelegte Dateien weg (4.2)', () => {
+	const stumm = () => vi.spyOn(console, 'error').mockImplementation(() => {});
+
+	it('wenn das Anlegen des Bons scheitert', async () => {
+		const fehler = stumm();
+		const d = deps({ legeBonAn: vi.fn(async () => { throw new Error('Verbindung weg'); }) });
+		expect((await nimmBildAuf(bild(), d)).art).toBe('fehler');
+		expect(d.loescheBilder).toHaveBeenCalledWith(['a.webp', 'a.thumb.webp']);
+		fehler.mockRestore();
+	});
+
+	it('auch beim Ereignis-Konflikt — der schnellere Aufruf hat eigene Dateien', async () => {
+		const konflikt = Object.assign(new Error('duplicate key'), { code: '23505', constraint: 'receipts_matrix_event_id_unique' });
+		const d = deps({
+			findeBonZuEreignis: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce('r1'),
+			legeBonAn: vi.fn(async () => { throw konflikt; })
+		});
+		expect(await nimmBildAuf(bild(), d)).toEqual({ art: 'schon_bekannt', receiptId: 'r1' });
+		expect(d.loescheBilder).toHaveBeenCalledWith(['a.webp', 'a.thumb.webp']);
+	});
+
+	it('nicht, wenn der Bon steht — auch nicht, wenn nur das Einreihen scheitert', async () => {
+		const ok = deps();
+		await nimmBildAuf(bild(), ok);
+		expect(ok.loescheBilder).not.toHaveBeenCalled();
+		const ohneJob = deps({ enqueueExtraction: vi.fn(async () => { throw new Error('pg-boss weg'); }) });
+		expect((await nimmBildAuf(bild(), ohneJob)).art).toBe('nicht_eingereiht');
+		expect(ohneJob.loescheBilder).not.toHaveBeenCalled();
+	});
+
+	it('nicht, wenn gar nichts abgelegt wurde', async () => {
+		const fehler = stumm();
+		const d = deps({ storeReceiptImage: vi.fn(async () => { throw new Error('Input buffer contains unsupported image format'); }) });
+		expect((await nimmBildAuf(bild(), d)).art).toBe('kein_bild');
+		expect(d.loescheBilder).not.toHaveBeenCalled();
+		fehler.mockRestore();
 	});
 });
 

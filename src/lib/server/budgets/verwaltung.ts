@@ -1,9 +1,10 @@
-import { and, asc, count, eq, isNull } from 'drizzle-orm';
+import { and, asc, eq, gt, isNull, or } from 'drizzle-orm';
 import { z } from 'zod';
 import type { db as Db } from '$lib/server/db';
-import { budgets, budgetBetraege, budgetKategorien, categories, receipts, receiptItems } from '$lib/server/db/schema';
+import { budgets, budgetBetraege, budgetKategorien, categories } from '$lib/server/db/schema';
 import { budgetsFuerMonat } from './aufloesung';
-import { sichtbareBons, sichtbareToepfe } from '$lib/server/zugriff/sichtbar';
+import { sichtbareToepfe } from '$lib/server/zugriff/sichtbar';
+import { kategorienStandLaden } from '$lib/server/bons/liste';
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
 
 /**
@@ -247,17 +248,20 @@ export async function kategorieLoesen(
 
 /**
  * Loeschen heisst beenden, nicht entfernen: der Topf behaelt Name und Betraege, damit
- * vergangene Berichte bleiben, wie sie waren. Seine laufenden Zuordnungen enden mit dem
+ * vergangene Berichte bleiben, wie sie waren. Seine laufenden und später endenden Zuordnungen enden mit dem
  * Monat davor, und `geloescht_ab` haelt fest, ab wann es ihn nicht mehr gibt.
  */
 export async function budgetLoeschen(db: Ausfuehrer, k: Zugriffskontext, budgetId: string, abMonat: string) {
 	const giltAb = monatsErster(abMonat);
 	const giltBis = letzterTagVorMonat(abMonat);
 	if (!giltAb || !giltBis) throw new Error(`Kein Monat: ${abMonat}`);
+	// Laufende UND spaeter endende Zuordnungen enden mit dem Monat davor — sonst zaehlte
+	// der Topf im Topffilter nach seinem Loeschmonat weiter (Sammelfassung 3.9). Schon
+	// frueher beendete bleiben, wie sie sind.
 	await db
 		.update(budgetKategorien)
 		.set({ giltBis })
-		.where(and(eq(budgetKategorien.budgetId, budgetId), isNull(budgetKategorien.giltBis)));
+		.where(and(eq(budgetKategorien.budgetId, budgetId), or(isNull(budgetKategorien.giltBis), gt(budgetKategorien.giltBis, giltBis))));
 	await db
 		.update(budgets)
 		.set({ geloeschtAb: giltAb })
@@ -278,7 +282,7 @@ function istEindeutigkeitsfehler(err: unknown): boolean {
 export async function budgetsSeiteLaden(db: typeof Db, k: Zugriffskontext, monat: string) {
 	const erster = `${monat}-01`;
 
-	const [toepfe, betraege, zuordnungen, kategorien, [positionen]] = await Promise.all([
+	const [toepfe, betraege, zuordnungen, kategorien, positionen] = await Promise.all([
 		db
 			.select({
 				id: budgets.id,
@@ -318,11 +322,7 @@ export async function budgetsSeiteLaden(db: typeof Db, k: Zugriffskontext, monat
 			.select({ id: categories.id, name: categories.name, parentId: categories.parentId })
 			.from(categories)
 			.orderBy(asc(categories.sort), asc(categories.name)),
-		db
-			.select({ mitKategorie: count(receiptItems.categoryId), gesamt: count() })
-			.from(receiptItems)
-			.innerJoin(receipts, eq(receipts.id, receiptItems.receiptId))
-			.where(sichtbareBons(k))
+		kategorienStandLaden(db, k)
 	]);
 
 	// Ein geloeschter Topf verschwindet erst ab dem Monat seiner Loeschung. Fuer einen

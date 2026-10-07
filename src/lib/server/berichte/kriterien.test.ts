@@ -109,7 +109,10 @@ describe('topfKategorienJeMonat', () => {
 		{ id: 'brot', parentId: 'lm' },
 		{ id: 'haus', parentId: null }
 	];
-	const toepfe = [{ id: 't1', name: 'Essen', sichtbarkeit: 'geteilt' as const }, { id: 't2', name: 'Haus', sichtbarkeit: 'geteilt' as const }];
+	const toepfe = [
+		{ id: 't1', name: 'Essen', sichtbarkeit: 'geteilt' as const, geloeschtAb: null },
+		{ id: 't2', name: 'Haus', sichtbarkeit: 'geteilt' as const, geloeschtAb: null }
+	];
 	const zuordnungen = [
 		{ budgetId: 't1', categoryId: 'lm', giltAb: '2026-01-01', giltBis: '2026-06-30', eigentuemerId: null },
 		{ budgetId: 't1', categoryId: 'haus', giltAb: '2026-07-01', giltBis: null, eigentuemerId: null },
@@ -121,5 +124,16 @@ describe('topfKategorienJeMonat', () => {
 		// Im Maerz: Lebensmittel (Brot hat eine eigene Zuordnung zu t2 und gehoert deshalb dorthin).
 		expect([...je.get('2026-03')!].sort()).toEqual(['lm']);
 		expect([...je.get('2026-09')!].sort()).toEqual(['haus']);
+	});
+
+	// Sammelfassung 3.9: mit einer Zuordnung, die erst nach dem Loeschmonat endet, zaehlte der
+	// Topf weiter — die Budgets (abfragen.ts, standIm) taten das nie.
+	it('zaehlt einen geloeschten Topf ab seinem Loeschmonat nicht mehr', () => {
+		const geloescht = [{ id: 't1', name: 'Essen', sichtbarkeit: 'geteilt' as const, geloeschtAb: '2026-10-01' }];
+		const spaeter = [{ budgetId: 't1', categoryId: 'lm', giltAb: '2026-01-01', giltBis: '2026-12-31', eigentuemerId: null }];
+		const je = topfKategorienJeMonat(['t1'], geloescht, [], spaeter, kategorien, ['2026-09', '2026-10', '2026-11']);
+		expect([...je.get('2026-09')!].sort()).toEqual(['brot', 'lm']);
+		expect([...je.get('2026-10')!]).toEqual([]);
+		expect([...je.get('2026-11')!]).toEqual([]);
 	});
 });

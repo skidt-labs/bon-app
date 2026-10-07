@@ -1,7 +1,7 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1.
  *
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/berichte/berichte.db.test.ts
  *
  * Bewacht: ein privater Bon eines anderen Mitglieds taucht in keiner Summe, keiner Liste
@@ -18,7 +18,8 @@ import { households, users, householdMembers, receipts, receiptItems, merchants,
 import { heutigerTag } from '$lib/server/zeit';
 import { leererFilter } from '$lib/berichte/filter';
 import { monatVon } from '$lib/berichte/kalender';
-import { berichtLaden } from './abfragen';
+import { berichtLaden, monatsSummenLaden } from './abfragen';
+import { zurueckgerollt, testHaushalt } from '$lib/server/db/testdaten';
 import { bonsZuFilter } from './bons';
 
 const RUN = process.env.RUN_DB_TESTS === '1';
@@ -259,5 +260,33 @@ describe.skipIf(!RUN)('Berichte: Sichtbarkeit mit Filtern (live)', () => {
 				throw new Error('ROLLBACK_ABSICHT');
 			})
 		).rejects.toThrow('ROLLBACK_ABSICHT');
+	});
+});
+
+// Sammelfassung 3.3: dieselbe Abfrage fuer die Zeitwahl auf /reports und /reports/bons.
+describe.skipIf(!RUN)('Berichte: Monatssummen der Zeitwahl (live)', () => {
+	it('summiert bestaetigte Bons je Berliner Monat, nach Umfang', async () => {
+		await zurueckgerollt(async (tx) => {
+			const tdb = tx as unknown as typeof db;
+			const { haushaltId, nutzerId, k } = await testHaushalt(tx);
+			const [max] = await tx
+				.insert(users)
+				.values({ oidcSub: randomUUID(), email: `${randomUUID()}@example.invalid`, displayName: 'Max' })
+				.returning({ id: users.id });
+			await tx.insert(householdMembers).values({ householdId: haushaltId, userId: max.id, rolle: 'mitglied' });
+			const bon = (von: string, status: 'confirmed' | 'review', tag: string, cents: number) =>
+				tx.insert(receipts).values({
+					householdId: haushaltId, uploadedBy: von, imagePath: 'test/erfunden.webp', thumbPath: 'test/erfunden-klein.webp',
+					sichtbarkeit: 'geteilt', status, purchasedAt: new Date(`${tag}T10:00:00Z`), totalGrossCents: cents
+				});
+			await bon(nutzerId, 'confirmed', '2024-05-10', 1200);
+			await bon(nutzerId, 'confirmed', '2026-08-03', 4000);
+			await bon(nutzerId, 'confirmed', '2026-08-20', 711);
+			await bon(nutzerId, 'review', '2026-08-21', 9999); // ungeprueft: zaehlt nicht
+			await bon(max.id, 'confirmed', '2026-08-05', 500);
+
+			expect(await monatsSummenLaden(tdb, k, { umfang: 'haushalt' })).toEqual({ '2024-05': 1200, '2026-08': 5211 });
+			expect(await monatsSummenLaden(tdb, k, { umfang: 'meine' })).toEqual({ '2024-05': 1200, '2026-08': 4711 });
+		});
 	});
 });

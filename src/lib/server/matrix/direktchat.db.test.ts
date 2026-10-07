@@ -1,6 +1,9 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1, in einer
- * zurueckgerollten Transaktion.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1, in einer
+ * zurueckgerollten Transaktion:
+ *
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
+ *     npx vitest run src/lib/server/matrix/direktchat.db.test.ts
  */
 import { describe, it, expect } from 'vitest';
 import { randomUUID } from 'node:crypto';

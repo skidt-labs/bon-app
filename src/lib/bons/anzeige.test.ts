@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { statusText, quelleText, tagesgruppen, filterLink, formatWann, vonReserveGelesen } from './anzeige';
+import { statusText, quelleText, tagesgruppen, filterLink, formatWann, vonReserveGelesen, wartetAufLesen, leseKnopf, anzahlBons } from './anzeige';
 
 describe('statusText und quelleText', () => {
 	it('uebersetzen jeden Wert und lassen Unbekanntes sichtbar', () => {
@@ -80,5 +80,43 @@ describe('vonReserveGelesen', () => {
 	it('gilt nicht, wenn der juengste Lauf gescheitert ist', () => {
 		expect(vonReserveGelesen('review', lauf('reserve', 'Antwort passt nicht zum Schema'))).toBe(false);
 		expect(vonReserveGelesen('confirmed', lauf('reserve', 'x'))).toBe(false);
+	});
+});
+
+describe('wartetAufLesen', () => {
+	// 2.6: gilt fuer beide Wartezustaende, egal woher (Hochladen, Papierkorb, Bild bearbeiten).
+	it('gilt fuer wartend und im Lesen', () => {
+		expect(wartetAufLesen('pending')).toBe(true);
+		expect(wartetAufLesen('extracting')).toBe(true);
+	});
+	it('gilt fuer nichts sonst', () => {
+		for (const s of ['review', 'confirmed', 'failed', 'doppelt', 'verworfen']) expect(wartetAufLesen(s)).toBe(false);
+	});
+});
+
+describe('leseKnopf', () => {
+	it('bietet beim fehlgeschlagenen Bon ohne Kein-Bon-Hinweis „Erneut lesen“', () => {
+		expect(leseKnopf('failed', null)).toBe('erneut');
+	});
+	// 2.12: mit Hinweis scheiterte „Erneut lesen“ sicher wieder an derselben Vorpruefung.
+	it('bietet mit Kein-Bon-Hinweis „Doch ein Bon“ statt „Erneut lesen“', () => {
+		expect(leseKnopf('failed', 'kein_bon_ohne_preise')).toBe('dochEinBon');
+		expect(leseKnopf('failed', 'kein_bon_kartenbeleg')).toBe('dochEinBon');
+	});
+	it('bietet bei kaum Text keins von beiden — dann bleibt Eintragen von Hand', () => {
+		expect(leseKnopf('failed', 'kein_bon_leer')).toBeNull();
+	});
+	it('bietet ausserhalb von „fehlgeschlagen“ nichts', () => {
+		expect(leseKnopf('review', null)).toBeNull();
+		expect(leseKnopf('review', 'kein_bon_ohne_preise')).toBeNull();
+	});
+});
+
+describe('anzahlBons', () => {
+	// 2.4: Haushalt „1 Bons".
+	it('sagt „1 Bon“ in der Einzahl', () => {
+		expect(anzahlBons(1)).toBe('1 Bon');
+		expect(anzahlBons(0)).toBe('0 Bons');
+		expect(anzahlBons(12)).toBe('12 Bons');
 	});
 });

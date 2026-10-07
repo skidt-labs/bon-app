@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { DrizzleQueryError } from 'drizzle-orm';
 import { erzeugeCode, hashCode, PAIRING_ALPHABET, CODE_LAENGE } from './pairing';
 
 describe('Kopplungscode', () => {
@@ -279,6 +280,43 @@ describe('Code einlösen', () => {
       grund: 'konto_schon_gekoppelt'
     });
   });
+
+// N1 (Sammelfassung 0.11.0): derselbe Konflikt, wie drizzle 0.45 ihn wirklich weiterreicht.
+it('erkennt konto_schon_gekoppelt auch hinter DrizzleQueryError', async () => {
+  const { codeEinloesen } = await import('./pairing');
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    mocks.codeZeilen = [gueltig()];
+    mocks.naechsterInsertFehler = {
+      tabelle: 'matrix_links',
+      fehler: new DrizzleQueryError('insert into "matrix_links" …', [], eindeutigkeitsFehler('matrix_links_user_id_unique'))
+    };
+    await expect(codeEinloesen('ABCDEFGH', '@neu:example.org', JETZT)).resolves.toEqual({
+      ok: false,
+      grund: 'konto_schon_gekoppelt'
+    });
+  } finally {
+    spy.mockRestore();
+  }
+});
+
+it('erkennt schon_verknuepft auch hinter DrizzleQueryError', async () => {
+  const { codeEinloesen } = await import('./pairing');
+  const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+  try {
+    mocks.codeZeilen = [gueltig()];
+    mocks.naechsterInsertFehler = {
+      tabelle: 'matrix_links',
+      fehler: new DrizzleQueryError('insert into "matrix_links" …', [], eindeutigkeitsFehler('matrix_links_matrix_user_id_unique'))
+    };
+    await expect(codeEinloesen('ABCDEFGH', '@neu:example.org', JETZT)).resolves.toEqual({
+      ok: false,
+      grund: 'schon_verknuepft'
+    });
+  } finally {
+    spy.mockRestore();
+  }
+});
 
   // Korrekturrunde 2: codeEinloesen() darf UNTER KEINEN UMSTÄNDEN werfen — sonst
   // bekommt der Bot-Nutzer gar keine Antwort. 'unbekannt' wäre hier aber eine

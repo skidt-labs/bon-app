@@ -113,7 +113,7 @@ export function positionsTreffer<T extends PositionFuerFilter>(
  */
 export function topfKategorienJeMonat(
 	topfIds: string[],
-	toepfe: BudgetZeile[],
+	toepfe: (BudgetZeile & { geloeschtAb: string | null })[],
 	betraege: BetragZeile[],
 	zuordnungen: ZuordnungZeile[],
 	kategorien: KategorieZeile[],
@@ -122,8 +122,12 @@ export function topfKategorienJeMonat(
 	const gewaehlt = new Set(topfIds);
 	const je = new Map<string, Set<string>>();
 	for (const monat of monate) {
+		// Ein geloeschter Topf zaehlt ab dem Monat seiner Loeschung nicht mehr — dieselbe
+		// Regel wie der Budgetstand (abfragen.ts, standIm; Sammelfassung 3.9).
+		const erster = `${monat}-01`;
+		const gueltig = toepfe.filter((t) => t.geloeschtAb === null || t.geloeschtAb > erster);
 		const ids = new Set<string>();
-		for (const b of budgetsFuerMonat(toepfe, betraege, zuordnungen, kategorien, monat).budgets) {
+		for (const b of budgetsFuerMonat(gueltig, betraege, zuordnungen, kategorien, monat).budgets) {
 			if (gewaehlt.has(b.budgetId)) for (const id of b.kategorieIds) ids.add(id);
 		}
 		je.set(monat, ids);

@@ -50,10 +50,14 @@ export async function bonEinsortieren(
 ): Promise<EinsortierErgebnis> {
 	try {
 		const [bon] = await db
-			.select({ householdId: receipts.householdId, merchantId: receipts.merchantId })
+			.select({ householdId: receipts.householdId, merchantId: receipts.merchantId, status: receipts.status })
 			.from(receipts)
 			.where(eq(receipts.id, receiptId));
-		if (!bon) return LEER;
+		// Ein Bon im Papierkorb zaehlt nirgends — fuer ihn wird kein Modell gefragt (2.4). Das
+		// betrifft vor allem den Nachlauf. Der Worker kommt mit einem verworfenen Bon nur hierher,
+		// wenn jemand ihn genau zwischen Speichern und Einsortieren verworfen hat; waehrend des
+		// Lesens verworfen, endet der Auftrag schon beim Speichern mit BonNichtMehrOffen.
+		if (!bon || bon.status === 'verworfen') return LEER;
 
 		const [unsortiertZeile] = await db
 			.select({ id: categories.id })

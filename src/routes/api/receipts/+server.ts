@@ -1,7 +1,7 @@
 import { json, error } from '@sveltejs/kit';
 import { db } from '$lib/server/db';
 import { bonAnlegen, bonAlsFehlgeschlagenMarkieren } from '$lib/server/bons/liste';
-import { storeReceiptImage, istSystemfehler } from '$lib/server/storage/images';
+import { storeReceiptImage, istSystemfehler, loescheBilder } from '$lib/server/storage/images';
 import { enqueueExtraction } from '$lib/server/queue/boss';
 import type { RequestHandler } from './$types';
 
@@ -49,7 +49,15 @@ export const POST: RequestHandler = async ({ request, locals }) => {
 		error(422, 'Bild nicht verarbeitbar');
 	}
 
-	const id = await bonAnlegen(db, locals.zugriff!, { imagePath, thumbPath, source });
+	let id: string;
+	try {
+		id = await bonAnlegen(db, locals.zugriff!, { imagePath, thumbPath, source });
+	} catch (err) {
+		// Sammelfassung 4.2: ohne Bon-Zeile zeigt nichts auf die gerade gespeicherten Dateien.
+		// Der Fehler geht weiter (500) — die Outbox behaelt das Foto und versucht es spaeter.
+		await loescheBilder([imagePath, thumbPath]);
+		throw err;
+	}
 
 	try {
 		await enqueueExtraction(id);

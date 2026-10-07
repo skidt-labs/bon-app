@@ -1,4 +1,11 @@
 /**
+ * Hoechstens so lange wartet eine Meldung auf Synapse (Sammelfassung 0.11.0, 4.5). Meldungen
+ * laufen mitten in Auftraegen (Umschalten, Fehlschlag); ohne Grenze schoebe eine haengende
+ * Verbindung den Auftrag ueber seinen Verfall. fristen.test.ts rechnet mit diesem Wert.
+ */
+export const MATRIX_ZEITLIMIT_MS = 10_000;
+
+/**
  * K2 (Korrekturrunde 2): Dieser Weg ist der Alarm, mit dem E2 den Preis für E1
  * bezahlt — „Jedes nicht entschlüsselbare Ereignis erzeugt eine Antwort im Chat UND
  * einen Alarm". Bis eben konnte er still tot sein, ohne dass das je auffiel: `fetch`
@@ -29,7 +36,8 @@ export async function notifyMatrix(text: string): Promise<void> {
 		const res = await fetch(url, {
 			method: 'PUT',
 			headers: { authorization: `Bearer ${MATRIX_TOKEN}`, 'content-type': 'application/json' },
-			body: JSON.stringify({ msgtype: 'm.text', body: text })
+			body: JSON.stringify({ msgtype: 'm.text', body: text }),
+			signal: AbortSignal.timeout(MATRIX_ZEITLIMIT_MS)
 		});
 		if (!res.ok) {
 			// K2: genau die Lücke, die den Alarmweg still tot sein liess. `fetch` wirft

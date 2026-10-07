@@ -109,7 +109,7 @@ describe('Matrix-Berichte', () => {
 		expect(createQueue).toHaveBeenCalledWith('matrix-bericht');
 	});
 
-	// Zweimal getippt ist eine Nachricht, nicht zwei: ein Auftrag je Nutzer und 30 Sekunden.
+	// Ein Auftrag je Nutzer und FESTEM 30-s-Fenster (pg-boss rechnet ab der vollen halben Minute).
 	it('schickt einen Auftrag je Nutzer, nicht einen je Klick', async () => {
 		const { enqueueMatrixBericht, QUEUE_MATRIX_BERICHT } = await freshBoss();
 		await enqueueMatrixBericht({ userId: 'u1', text: 'Bericht' });
@@ -118,5 +118,15 @@ describe('Matrix-Berichte', () => {
 			{ userId: 'u1', text: 'Bericht' },
 			expect.objectContaining({ singletonKey: 'u1', singletonSeconds: 30, retryLimit: 3 })
 		);
+	});
+
+	// Sammelfassung 3.11: lag im selben Fenster schon ein Auftrag, gab pg-boss null zurueck —
+	// und die Seite sagte trotzdem „unterwegs".
+	it('meldet, ob der Auftrag angenommen wurde', async () => {
+		const { enqueueMatrixBericht } = await freshBoss();
+		send.mockResolvedValueOnce('job-1');
+		expect(await enqueueMatrixBericht({ userId: 'u1', text: 'Bericht' })).toBe(true);
+		send.mockResolvedValueOnce(null);
+		expect(await enqueueMatrixBericht({ userId: 'u1', text: 'Anderer Bericht' })).toBe(false);
 	});
 });

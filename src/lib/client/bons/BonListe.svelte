@@ -1,12 +1,15 @@
 <script lang="ts">
 	import { formatCents } from '$lib/money';
 	import { describeProblem, keinBonCode } from '$lib/bons/beanstandungen';
-	import { statusText, quelleText, formatWann, tagesgruppen } from '$lib/bons/anzeige';
+	import { statusText, quelleText, formatWann, tagesgruppen, leseKnopf } from '$lib/bons/anzeige';
 	import { invalidateAll } from '$app/navigation';
 	import { erneutLesen } from './erneutLesen';
-	import { papierkorbAktion } from './papierkorb';
-	import { restTage } from '$lib/bons/papierkorb';
+	import { dochEinBonAnfrage, nachDochEinBon } from './keinBon';
+	import { papierkorbAktion, korbAnfrage, nachKorb, type KorbAktion, type Nachfrage } from './papierkorb';
+	import { restTage, restTageText } from '$lib/bons/papierkorb';
+	import { mitWartezustand } from '$lib/client/warten';
 	import Aufklapper from '$lib/client/berichte/Aufklapper.svelte';
+	import { MenueRunden } from '$lib/client/berichte/menue';
 	import type { BonZeile } from '$lib/server/bons/liste';
 
 	let { bons, leerText }: { bons: BonZeile[]; leerText: string } = $props();
@@ -19,8 +22,11 @@
 	});
 	let meldungen = $state<Record<string, string>>({});
 	let laufend = $state<Record<string, boolean>>({});
-	/** Pro Bon: steht die zweite Stufe fuer einen bestaetigten Bon bzw. fuers Loeschen offen? */
-	let nachfrage = $state<Record<string, 'verwerfen' | 'loeschen' | undefined>>({});
+
+	/** Je Bon: wie oft sein Menue zuging — eine spaete Antwort setzt keine Stufe mehr (1.6). */
+	const runden = new MenueRunden();
+	/** Die ganze Liste: Fokusziel, wenn eine Karte samt offenem Menue verschwindet (1.1). */
+	let liste = $state<HTMLElement | null>(null);
 
 	const gruppen = $derived(tagesgruppen(zeilen));
 
@@ -32,30 +38,54 @@
 		return (b.problems ?? []).map(describeProblem).join(' · ');
 	}
 
+	/** Pro Bon: steht die zweite Stufe fuer einen bestaetigten Bon bzw. fuers Loeschen offen? */
+	let nachfrage = $state<Record<string, Nachfrage>>({});
+	/** Ueber der Liste: was nach dem Neuladen nicht mehr an einer Zeile stehen kann (2.11). */
+	let hinweis = $state('');
+
 	/**
 	 * Papierkorb (bons/papierkorb.ts). Zweistufig, wo es weh tut: einen bestaetigten Bon
 	 * verwerfen und endgueltig loeschen — der erste Klick fragt nach, der zweite handelt.
 	 */
-	async function korb(b: BonZeile, aktion: 'verwerfen' | 'wiederherstellen' | 'loeschen') {
-		const braucht = aktion === 'loeschen' || (aktion === 'verwerfen' && b.status === 'confirmed');
-		if (braucht && nachfrage[b.id] !== aktion) {
-			nachfrage[b.id] = aktion;
+	async function korb(b: BonZeile, aktion: KorbAktion) {
+		const a = korbAnfrage(aktion, b.status, nachfrage[b.id]);
+		if ('nachfragen' in a) {
+			nachfrage[b.id] = a.nachfragen;
 			return;
 		}
-		laufend[b.id] = true;
-		const r = await papierkorbAktion(
-			b.id,
-			aktion,
-			aktion === 'verwerfen' ? { bestaetigtWegnehmen: b.status === 'confirmed' } : {}
+		// Ab hier laeuft die Anfrage. Geht das Menue zu, bevor die Antwort da ist, gilt deren
+		// Stufe nicht mehr (1.6).
+		const runde = runden.runde(b.id);
+		await mitWartezustand(
+			(an) => (laufend[b.id] = an),
+			async () => {
+				delete meldungen[b.id];
+				hinweis = '';
+				// 2.3: bei brauchtRueckfrage steht danach die zweite Stufe offen.
+				const f = nachKorb(aktion, await papierkorbAktion(b.id, aktion, a.rumpf));
+				nachfrage[b.id] = runden.gilt(b.id, runde) ? f.nachfrage : undefined;
+				if (f.meldung) meldungen[b.id] = f.meldung;
+				// Liste und Zaehler neu vom Server: der Bon wechselt den Filter. Erst danach ist der
+				// Knopf wieder frei (2.7).
+				if (f.neuLaden) await invalidateAll();
+				// Ueber der Liste, nicht an der Zeile: aus dem Papierkorb-Filter ist der Bon jetzt weg.
+				if (f.hinweis) hinweis = f.hinweis;
+			}
 		);
-		laufend[b.id] = false;
-		nachfrage[b.id] = undefined;
-		if (!r.ok) {
-			meldungen[b.id] = r.meldung;
-			return;
-		}
-		// Liste und Zaehler neu vom Server: der Bon wechselt den Filter.
-		await invalidateAll();
+	}
+
+	/** „Doch ein Bon, lesen" auch hier (2.12); meldet, wenn das Einreihen scheiterte (2.11). */
+	async function dochEinBon(b: BonZeile) {
+		await mitWartezustand(
+			(an) => (laufend[b.id] = an),
+			async () => {
+				delete meldungen[b.id];
+				const r = await dochEinBonAnfrage(b.id);
+				const f = nachDochEinBon(b.status, r);
+				if (r.ok) await invalidateAll();
+				if (f.meldung) meldungen[b.id] = f.meldung;
+			}
+		);
 	}
 
 	async function nochmal(b: BonZeile) {
@@ -72,6 +102,10 @@
 	}
 </script>
 
+<!-- tabindex -1: faellt eine Karte samt offenem Menue weg (nach „Wiederherstellen", „Verwerfen" …),
+     geht der Fokus hierher statt an den Seitenanfang (1.1). Auch die letzte Karte: die Liste bleibt. -->
+<div bind:this={liste} tabindex="-1" class="rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-tuerkis">
+{#if hinweis}<p role="status" class="px-1 pb-2 text-sm font-semibold text-rot-dunkel">{hinweis}</p>{/if}
 {#if zeilen.length === 0}
 	<p class="pt-2 text-sm text-leise">{leerText}</p>
 {:else}
@@ -129,17 +163,24 @@
 						<td class="px-3 py-2.5 text-leise">{quelleText(b.source)}</td>
 						<td class="px-3 py-2.5 text-right whitespace-nowrap">
 							{#if b.status === 'failed'}
-								<button type="button" class="font-bold text-tuerkis-dunkel" disabled={laufend[b.id]} onclick={() => nochmal(b)}>
-									{laufend[b.id] ? 'Wird eingereiht …' : 'Erneut lesen'}
-								</button>
-								<a href="/receipts/{b.id}" class="ml-3 font-bold text-tuerkis-dunkel">Eintragen ›</a>
+								{@const knopf = leseKnopf(b.status, keinBonCode(b.problems))}
+								{#if knopf === 'erneut'}
+									<button type="button" class="mr-3 font-bold text-tuerkis-dunkel" disabled={laufend[b.id]} onclick={() => nochmal(b)}>
+										{laufend[b.id] ? 'Wird eingereiht …' : 'Erneut lesen'}
+									</button>
+								{:else if knopf === 'dochEinBon'}
+									<button type="button" class="mr-3 font-bold text-tuerkis-dunkel" disabled={laufend[b.id]} onclick={() => dochEinBon(b)}>
+										{laufend[b.id] ? 'Wird eingereiht …' : 'Doch ein Bon, lesen'}
+									</button>
+								{/if}
+								<a href="/receipts/{b.id}" class="font-bold text-tuerkis-dunkel">Eintragen ›</a>
 							{:else if b.status === 'review' || b.status === 'confirmed' || b.status === 'verworfen' || b.status === 'doppelt'}
 								<a href="/receipts/{b.id}" class="font-bold text-tuerkis-dunkel">{b.status === 'review' ? 'Prüfen ›' : 'Ansehen ›'}</a>
 							{/if}
 							<!-- Direkt in der Zeile statt als Menue: die Tabelle rollt waagerecht
 							     (overflow-x-auto), ein aufklappender Kasten wuerde darin abgeschnitten. -->
 							{#if b.status === 'verworfen'}
-								<span class="ml-3 text-[12px] font-semibold text-leise">noch {b.verworfenAm ? restTage(b.verworfenAm, new Date()) : 0} Tage</span>
+								{#if b.verworfenAm}<span class="ml-3 text-[12px] font-semibold text-leise">{restTageText(restTage(b.verworfenAm, new Date()))}</span>{/if}
 								{#if b.darfVerwerfen}
 									<button type="button" class="ml-3 font-bold text-tuerkis-dunkel" disabled={laufend[b.id]} onclick={() => korb(b, 'wiederherstellen')}>Wiederherstellen</button>
 									<button type="button" class="ml-3 font-bold text-rot-dunkel" disabled={laufend[b.id]} onclick={() => korb(b, 'loeschen')}>
@@ -198,7 +239,7 @@
 								<p class="mt-1.5 text-sm" class:text-bernstein={b.status !== 'failed'} class:text-rot-dunkel={b.status === 'failed'}>{problemText(b)}</p>
 							{/if}
 							{#if b.status === 'verworfen' && b.verworfenAm}
-								<p class="mt-1.5 text-sm font-semibold text-gedaempft">Noch {restTage(b.verworfenAm, new Date())} Tage im Papierkorb</p>
+								<p class="mt-1.5 text-sm font-semibold text-gedaempft">Papierkorb: {restTageText(restTage(b.verworfenAm, new Date()))}</p>
 							{/if}
 						</div>
 					</a>
@@ -209,6 +250,11 @@
 								ausrichtung="rechts"
 								breite="sm:w-[260px]"
 								label="Aktionen für diesen Bon"
+								onzu={() => {
+									runden.zu(b.id);
+									nachfrage[b.id] = undefined;
+								}}
+								ausweich={() => liste}
 								knopfKlasse="grid h-9 w-9 place-items-center rounded-full border border-linie bg-papier text-[15px] font-extrabold text-gedaempft"
 							>
 								{#snippet knopf()}⋯{/snippet}
@@ -237,13 +283,17 @@
 						</div>
 					{/if}
 					{#if b.status === 'failed'}
-						<div class="mt-2.5 flex items-center gap-3">
-							<button
-								type="button"
-								class="rounded-xl bg-tuerkis px-3.5 py-2 text-[13px] font-extrabold text-white disabled:opacity-60"
-								disabled={laufend[b.id]}
-								onclick={() => nochmal(b)}>{laufend[b.id] ? 'Wird eingereiht …' : 'Erneut lesen'}</button
-							>
+						{@const knopf = leseKnopf(b.status, keinBonCode(b.problems))}
+						<div class="mt-2.5 flex flex-wrap items-center gap-3">
+							{#if knopf !== null}
+								<button
+									type="button"
+									class="rounded-xl bg-tuerkis px-3.5 py-2 text-[13px] font-extrabold text-white disabled:opacity-60"
+									disabled={laufend[b.id]}
+									onclick={() => (knopf === 'erneut' ? nochmal(b) : dochEinBon(b))}
+									>{laufend[b.id] ? 'Wird eingereiht …' : knopf === 'erneut' ? 'Erneut lesen' : 'Doch ein Bon, lesen'}</button
+								>
+							{/if}
 							<a href="/receipts/{b.id}" class="text-[13px] font-bold text-tuerkis-dunkel">Von Hand eintragen ›</a>
 							{#if b.darfVerwerfen && keinBonCode(b.problems)}
 								<!-- Sieht nicht wie ein Kassenbon aus: Verwerfen gleich hier, nicht erst im Menue. -->
@@ -257,3 +307,4 @@
 		{/each}
 	</div>
 {/if}
+</div>

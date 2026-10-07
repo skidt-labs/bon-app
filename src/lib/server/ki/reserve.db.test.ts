@@ -4,8 +4,8 @@ import { and, eq, sql } from 'drizzle-orm';
 const gemeldet = vi.hoisted(() => [] as string[]);
 vi.mock('$lib/server/notify', () => ({ notifyMatrix: async (t: string) => void gemeldet.push(t) }));
 
-import { db } from '$lib/server/db';
-import { betriebsprotokoll, extractionRuns, householdMembers, instanz, kiAnbieter, receipts } from '$lib/server/db/schema';
+import { betriebsprotokoll, extractionRuns, instanz, kiAnbieter, receipts } from '$lib/server/db/schema';
+import { testHaushalt, zurueckgerollt, type Tx } from '$lib/server/db/testdaten';
 import {
 	echteUmschaltDeps,
 	grenzeErreicht,
@@ -18,29 +18,17 @@ import {
 } from './reserve';
 
 /**
- * Gegen die LAUFENDE Datenbank, hinter RUN_DB_TESTS=1 — und JEDER Fall zurueckgerollt. Der
+ * Gegen die Test-Datenbank, hinter RUN_DB_TESTS=1 — und JEDER Fall zurueckgerollt. Der
  * Worker liest `instanz` bei jedem Bon: eine Test-Reserve, die auch nur kurz sichtbar waere,
  * koennte einen echten Bon umleiten.
  *
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/ki/reserve.db.test.ts
  *
  * Die Laeufe fuer die Monatssumme liegen im Oktober 2031: echte Reserve-Laeufe aus der Zeit, in
  * der dieser Test laeuft, liegen davor und fallen aus der Summe.
  */
 const AUS = process.env.RUN_DB_TESTS !== '1';
-const ROLLBACK = new Error('rollback');
-type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
-
-async function zurueckgerollt(f: (tx: Tx) => Promise<void>) {
-	await expect(
-		db.transaction(async (tx) => {
-			await f(tx);
-			throw ROLLBACK;
-		})
-	).rejects.toBe(ROLLBACK);
-}
-
 /** Eine Reserve-Karte und die instanz-Zeile, die auf sie zeigt — nur in der Transaktion. */
 async function mitReserve(tx: Tx, reserve: boolean): Promise<string> {
 	const [k] = await tx
@@ -102,16 +90,12 @@ describe.skipIf(AUS)('Cloud-Reserve gegen die echte Datenbank', () => {
 	});
 
 	it('zaehlt nur Reserve-Laeufe des Kalendermonats in Berliner Zeit, beide Kostenspalten', async () => {
-		const [m] = await db
-			.select({ userId: householdMembers.userId, householdId: householdMembers.householdId })
-			.from(householdMembers)
-			.limit(1);
-		if (!m) return;
 		await zurueckgerollt(async (tx) => {
+			const ich = await testHaushalt(tx);
 			const reserveId = await mitReserve(tx, true);
 			const [bon] = await tx
 				.insert(receipts)
-				.values({ householdId: m.householdId, uploadedBy: m.userId, imagePath: 'test/r.webp', thumbPath: 'test/r.thumb.webp', status: 'review' })
+				.values({ householdId: ich.haushaltId, uploadedBy: ich.nutzerId, imagePath: 'test/r.webp', thumbPath: 'test/r.thumb.webp', status: 'review' })
 				.returning({ id: receipts.id });
 			const lauf = (createdAt: string, kiRolle: 'haupt' | 'reserve', cost: number | null, kat: number | null) => ({
 				receiptId: bon.id,

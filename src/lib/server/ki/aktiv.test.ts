@@ -223,6 +223,7 @@ describe('erzeugeAufloeser mit Reserve', () => {
 		haupt?: KiAnbieterRoh | null;
 		reserve?: KiAnbieterRoh | null;
 		umschalt?: Partial<UmschaltDeps>;
+		env?: NodeJS.ProcessEnv;
 	}) {
 		const zustand = { stand: 1, aktivId: opts.aktivId === undefined ? null : opts.aktivId, reserveId: opts.reserveId === undefined ? 'r1' : opts.reserveId };
 		const ueber: unknown[] = [];
@@ -232,7 +233,8 @@ describe('erzeugeAufloeser mit Reserve', () => {
 			EXTRACTION_BASE_URL: 'http://env.invalid/v1',
 			EXTRACTION_API_KEY: 'env-key',
 			EXTRACTION_MODEL: 'env-modell',
-			...SECRETS
+			...SECRETS,
+			...opts.env
 		} as NodeJS.ProcessEnv;
 		const umschaltDeps: UmschaltDeps = {
 			reserveAktivSeit: async () => new Date(),
@@ -288,11 +290,20 @@ describe('erzeugeAufloeser mit Reserve', () => {
 		expect(log.some((z) => z.includes('Reserve wirkungslos'))).toBe(true);
 	});
 
-	it('ein Hauptanbieter mit Bildweg nimmt keine Reserve', async () => {
+	// 4.10: vorher ohne Freigabe — der Aufloeser warf, `if (a)` liess den Test ohne ein einziges expect gruen.
+	it('ein Hauptanbieter mit Bildweg nimmt keine Reserve, auch mit Freigabe', async () => {
+		expect.assertions(4);
+		const { aufloesen, ueber, log } = aufbauMitReserve({ aktivId: 'a1', haupt: zeile({ weg: 'bild' }), env: { EXTRACTION_BILDWEG_BESTAETIGT: 'ja' } });
+		const a = await aufloesen();
+		expect(a.weg).toBe('bild');
+		expect(a.reserve).toBeNull();
+		expect((ueber[0] as { modellAufruf?: unknown } | undefined)?.modellAufruf).toBeUndefined();
+		expect(log.some((z) => z.includes('Reserve wirkungslos: der Hauptanbieter nutzt den Bildweg'))).toBe(true);
+	});
+
+	it('ein Hauptanbieter mit Bildweg ohne Freigabe wirft', async () => {
 		const { aufloesen } = aufbauMitReserve({ aktivId: 'a1', haupt: zeile({ weg: 'bild' }) });
-		const a = await aufloesen().catch(() => null);
-		// Ohne Freigabe wirft der Bildweg ohnehin; mit Freigabe darf trotzdem keine Reserve wirken.
-		if (a) expect(a.reserve).toBeNull();
+		await expect(aufloesen()).rejects.toBeInstanceOf(BildwegNichtFreigegeben);
 	});
 
 	// Abschlusspruefung 02.10.: ohne Preise zaehlen ihre Laeufe 0 € — die Monatsgrenze griffe nie.

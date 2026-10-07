@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
-import { ordneMitModell, ordneMitNachfrage, auswahlliste, echteModellDeps } from './modell';
+import { ordneMitModell, ordneMitNachfrage, auswahlliste, echteModellDeps, NACHFRAGE_ENTFALLEN } from './modell';
+import { auftragsFrist } from '$lib/server/queue/fristen';
 import type { ZuOrdnendeZeile } from './kaskade';
 
 const zeilen: ZuOrdnendeZeile[] = [
@@ -157,6 +158,16 @@ describe('ordneMitNachfrage', () => {
 		expect(r.vorschlaege).toEqual({ i1: 'lebensmittel-milch-eier' });
 		expect(r.fehler).toContain('Nachfrage');
 	});
+
+	// 4.5 (Sammelfassung 0.11.0): die Nachfrage ist ein zweiter Modellaufruf. Hat der Auftrag
+	// dafuer nicht mehr ihr volles Zeitlimit, bleibt es bei der ersten Antwort — mit Vermerk.
+	it('fragt nicht nach, wenn der Auftrag dafuer keine Zeit mehr hat', async () => {
+		const frag = antworten({ '1': 'lebensmittel-milch-eier' });
+		const r = await ordneMitNachfrage(drei, { frageModell: frag, nachfrageErlaubt: () => false });
+		expect(frag).toHaveBeenCalledTimes(1);
+		expect(r.vorschlaege).toEqual({ i1: 'lebensmittel-milch-eier' });
+		expect(r.fehler).toBe(NACHFRAGE_ENTFALLEN);
+	});
 });
 
 // Cloud-Reserve (Entwurf 2026-10-01): die Kategorien fragen das Modell, das den Bon gelesen
@@ -208,5 +219,41 @@ describe('echteModellDeps', () => {
 			fetchImpl: antwort(undefined)
 		}).frageModell('x');
 		expect(r.usage).toBeNull();
+	});
+
+	it('4.5: mit Auftrag endet die Frage an der Restzeit, und unter 120 s entfaellt die Nachfrage', async () => {
+		let jetzt = 0;
+		const frist = auftragsFrist(0, () => jetzt);
+		const zeit = vi.spyOn(AbortSignal, 'timeout');
+		try {
+			const deps = echteModellDeps({
+				ziel: { id: 'r', baseUrl: 'http://r.invalid/v1', apiKey: 'k', model: 'm' },
+				fetchImpl: antwort({ prompt_tokens: 1, completion_tokens: 1 }),
+				auftrag: { frist }
+			});
+			jetzt = 500_000; // 40 s bis zur Frist
+			await deps.frageModell('x');
+			expect(zeit).toHaveBeenCalledWith(40_000);
+			expect(deps.nachfrageErlaubt?.()).toBe(false);
+			jetzt = 420_000; // genau 120 s
+			expect(deps.nachfrageErlaubt?.()).toBe(true);
+		} finally {
+			zeit.mockRestore();
+		}
+	});
+
+	it('ohne Auftrag bleibt es bei 120 s, und die Nachfrage ist erlaubt (Nachlauf)', async () => {
+		const zeit = vi.spyOn(AbortSignal, 'timeout');
+		try {
+			const deps = echteModellDeps({
+				ziel: { id: 'r', baseUrl: 'http://r.invalid/v1', apiKey: 'k', model: 'm' },
+				fetchImpl: antwort({ prompt_tokens: 1, completion_tokens: 1 })
+			});
+			await deps.frageModell('x');
+			expect(zeit).toHaveBeenCalledWith(120_000);
+			expect(deps.nachfrageErlaubt?.() ?? true).toBe(true);
+		} finally {
+			zeit.mockRestore();
+		}
 	});
 });

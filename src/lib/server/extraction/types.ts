@@ -1,5 +1,6 @@
 import type { ExtractedReceipt } from './schema';
 import type { OcrLaufDaten, OcrZeileKurz } from '../ocr/anbieter';
+import type { AuftragsFrist } from '../queue/fristen';
 
 // null statt einer erfundenen 0: ein Provider, der keine Token-Zahlen meldet (oder sie in
 // einer Form meldet, der wir nicht trauen), darf nicht so aussehen, als wäre der Aufruf
@@ -151,6 +152,9 @@ export interface ExtractionProvider {
    * `ohneVorpruefung`: ein Mensch hat „Doch ein Bon, lesen" gesagt (Entwurf
    * 2026-09-27-kein-bon) — der Textweg schickt den OCR-Text dann trotz Vorpruefung an das
    * Modell. Der Bildweg hat keine Vorpruefung und uebergeht die Angabe.
+   *
+   * `frist` (Sammelfassung 0.11.0, 4.5): die Frist des Auftrags; der Textweg gibt sie an den
+   * Modellaufruf weiter (Reserve nur mit genug Restzeit). `signal` endet ohnehin an ihr.
    */
-  extract(image: Buffer, signal?: AbortSignal, opts?: { ohneVorpruefung?: boolean }): Promise<ExtractionResult>;
+  extract(image: Buffer, signal?: AbortSignal, opts?: { ohneVorpruefung?: boolean; frist?: AuftragsFrist }): Promise<ExtractionResult>;
 }

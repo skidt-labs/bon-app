@@ -27,3 +27,22 @@ export function defaultQuad(width: number, height: number): Quad {
 		{ x: mx, y: height - my }
 	];
 }
+
+/**
+ * Streng konvex und im Uhrzeigersinn auf dem Bildschirm (y nach unten) — die Reihenfolge, die
+ * defaultQuad und die Erkennung liefern. Ueber Kreuz liegende Ecken entzerrten gespiegelt (2.14c).
+ */
+export function istKonvex(q: Quad): boolean {
+	for (let i = 0; i < 4; i++) {
+		const a = q[i];
+		const b = q[(i + 1) % 4];
+		const c = q[(i + 2) % 4];
+		if ((b.x - a.x) * (c.y - b.y) - (b.y - a.y) * (c.x - b.x) <= 0) return false;
+	}
+	return true;
+}
+
+/** Ein Eckzug, der das Viereck nicht-konvex MACHEN wuerde, zaehlt nicht; ein schon schiefes darf repariert werden. */
+export function zugErlaubt(alt: Quad, neu: Quad): boolean {
+	return !istKonvex(alt) || istKonvex(neu);
+}

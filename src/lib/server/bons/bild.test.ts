@@ -4,6 +4,8 @@ const mocks = vi.hoisted(() => ({
 	bon: null as Record<string, unknown> | null,
 	updateTreffer: [{ id: 'r1' }] as unknown[],
 	updates: [] as Record<string, unknown>[],
+	/** Bei dieser Tabelle wirft das UPDATE (Datenbankfehler). */
+	wirftBei: null as unknown,
 	fehlgeschlagen: vi.fn(async () => {})
 }));
 
@@ -14,21 +16,41 @@ vi.mock('$lib/server/bons/liste', () => ({
 vi.mock('$lib/server/queue/boss', () => ({ enqueueExtraction: vi.fn(async () => {}) }));
 vi.mock('$lib/server/storage/images', () => ({ storeReceiptImage: vi.fn(), loescheBilder: vi.fn(async () => {}), istSystemfehler: () => false }));
 
+import { PgDialect } from 'drizzle-orm/pg-core';
+import type { SQL } from 'drizzle-orm';
 import { bildErsetzen, originalWiederherstellen } from './bild';
-import { receiptItems } from '$lib/server/db/schema';
+import { receipts, receiptItems } from '$lib/server/db/schema';
 
 const tabellen: unknown[] = [];
-const fakeDb = {
-	update: (tabelle: unknown) => ({
-		set: (set: Record<string, unknown>) => ({
-			where: () => {
-				mocks.updates.push(set);
-				tabellen.push(tabelle);
-				return Object.assign(Promise.resolve(), { returning: async () => mocks.updateTreffer });
-			}
-		})
-	})
-} as never;
+const bedingungen: unknown[] = [];
+/** Je UPDATE: lief es in der Transaktion (true) oder direkt auf der Verbindung (false)? */
+const inTransaktion: boolean[] = [];
+function verbindung(imTx: boolean): unknown {
+	return {
+		update: (tabelle: unknown) => ({
+			set: (set: Record<string, unknown>) => ({
+				where: (bedingung: unknown) => {
+					mocks.updates.push(set);
+					tabellen.push(tabelle);
+					bedingungen.push(bedingung);
+					inTransaktion.push(imTx);
+					const ergebnis = async () => {
+						if (tabelle === mocks.wirftBei) throw new Error('Verbindung weg');
+						return mocks.updateTreffer;
+					};
+					return {
+						then: (ja: (v: unknown) => unknown, nein: (e: unknown) => unknown) => ergebnis().then(ja, nein),
+						returning: ergebnis
+					};
+				}
+			})
+		}),
+		transaction: async (f: (tx: unknown) => Promise<unknown>) => f(verbindung(true))
+	};
+}
+const fakeDb = verbindung(false) as never;
+/** Parameter der WHERE-Bedingung des i-ten UPDATEs, wie Postgres sie bekommt. */
+const parameter = (i: number) => new PgDialect().sqlToQuery(bedingungen[i] as SQL).params;
 const ich = { haushaltId: 'h1', nutzerId: 'u1', rolle: 'mitglied' as const };
 const bon = (over: Record<string, unknown> = {}) => ({
 	id: 'r1',
@@ -53,6 +75,9 @@ beforeEach(() => {
 	vi.clearAllMocks();
 	mocks.updates = [];
 	tabellen.length = 0;
+	bedingungen.length = 0;
+	inTransaktion.length = 0;
+	mocks.wirftBei = null;
 	mocks.updateTreffer = [{ id: 'r1' }];
 });
 
@@ -122,6 +147,48 @@ describe('bildErsetzen', () => {
 		expect(await bildErsetzen(fakeDb, ich, 'r1', Buffer.from('x'), d)).toEqual({ ok: true });
 		expect(mocks.fehlgeschlagen).toHaveBeenCalled();
 	});
+
+	// Sammelfassung 4.1: ein veralteter Stand (anderer Tab hat inzwischen bearbeitet und der Bon
+	// ist schon wieder gelesen) hat denselben Status, aber ein anderes Bild.
+	it('prueft im UPDATE neben dem Status auch den gelesenen Bildpfad (4.1)', async () => {
+		mocks.bon = bon();
+		await bildErsetzen(fakeDb, ich, 'r1', Buffer.from('x'), deps());
+		expect(tabellen[0]).toBe(receipts);
+		expect(parameter(0)).toEqual(['r1', 'review', 'a/foto.webp']);
+	});
+
+	it('loescht die neuen Dateien und wirft weiter, wenn die Datenbank beim Speichern scheitert (4.1)', async () => {
+		mocks.bon = bon();
+		mocks.wirftBei = receipts;
+		const d = deps();
+		await expect(bildErsetzen(fakeDb, ich, 'r1', Buffer.from('x'), d)).rejects.toThrow('Verbindung weg');
+		expect(d.loeschen).toHaveBeenCalledWith(['b/neu.webp', 'b/neu.thumb.webp']);
+		expect(d.einreihen).not.toHaveBeenCalled();
+		expect(mocks.fehlgeschlagen).not.toHaveBeenCalled();
+	});
+
+	it('schreibt Bild und Zeilenrahmen in EINER Transaktion (4.1)', async () => {
+		mocks.bon = bon();
+		await bildErsetzen(fakeDb, ich, 'r1', Buffer.from('x'), deps());
+		expect(tabellen).toEqual([receipts, receiptItems]);
+		expect(inTransaktion).toEqual([true, true]);
+	});
+
+	it('scheitert das Loesen der Zeilenrahmen, wird nicht eingereiht und die neuen Dateien gehen (4.1)', async () => {
+		mocks.bon = bon();
+		mocks.wirftBei = receiptItems;
+		const d = deps();
+		await expect(bildErsetzen(fakeDb, ich, 'r1', Buffer.from('x'), d)).rejects.toThrow('Verbindung weg');
+		expect(d.loeschen).toHaveBeenCalledWith(['b/neu.webp', 'b/neu.thumb.webp']);
+		expect(d.einreihen).not.toHaveBeenCalled();
+	});
+
+	it('ruehrt bei einem geaenderten Bon die Zeilenrahmen nicht an', async () => {
+		mocks.bon = bon();
+		mocks.updateTreffer = [];
+		await bildErsetzen(fakeDb, ich, 'r1', Buffer.from('x'), deps());
+		expect(tabellen).toEqual([receipts]);
+	});
 });
 
 describe('originalWiederherstellen', () => {
@@ -144,5 +211,22 @@ describe('originalWiederherstellen', () => {
 		expect(d.loeschen).toHaveBeenCalledWith(['b/neu.webp', 'b/neu.thumb.webp']);
 		expect(d.einreihen).toHaveBeenCalledWith('r1');
 		expect(mocks.updates[tabellen.indexOf(receiptItems)]).toEqual({ ocrZeile: null });
+	});
+
+	it('prueft den gelesenen Bildpfad und schreibt in EINER Transaktion (4.1)', async () => {
+		mocks.bon = bon({ imagePath: 'b/neu.webp', thumbPath: 'b/neu.thumb.webp', originalImagePath: 'a/foto.webp', originalThumbPath: 'a/foto.thumb.webp' });
+		await originalWiederherstellen(fakeDb, ich, 'r1', deps());
+		expect(parameter(0)).toEqual(['r1', 'review', 'b/neu.webp']);
+		expect(tabellen).toEqual([receipts, receiptItems]);
+		expect(inTransaktion).toEqual([true, true]);
+	});
+
+	it('loescht bei einem Datenbankfehler nichts und liest nicht neu', async () => {
+		mocks.bon = bon({ imagePath: 'b/neu.webp', thumbPath: 'b/neu.thumb.webp', originalImagePath: 'a/foto.webp', originalThumbPath: 'a/foto.thumb.webp' });
+		mocks.wirftBei = receiptItems;
+		const d = deps();
+		await expect(originalWiederherstellen(fakeDb, ich, 'r1', d)).rejects.toThrow('Verbindung weg');
+		expect(d.loeschen).not.toHaveBeenCalled();
+		expect(d.einreihen).not.toHaveBeenCalled();
 	});
 });

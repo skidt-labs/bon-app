@@ -15,7 +15,8 @@ import { enqueueExtraction } from '$lib/server/queue/boss';
 import { keinBonCode } from '$lib/bons/beanstandungen';
 
 type Verbindung = typeof Db;
-export type DochEinBonErgebnis = { ok: true } | { ok: false; status: 404 | 409; meldung: string };
+/** `eingereiht`: steht jetzt ein Leseauftrag in der Warteschlange? Beim gelesenen Bon nie. */
+export type DochEinBonErgebnis = { ok: true; eingereiht: boolean } | { ok: false; status: 404 | 409; meldung: string };
 
 const SCHON_ENTSCHIEDEN: DochEinBonErgebnis = {
 	ok: false,
@@ -39,10 +40,13 @@ export async function dochEinBon(
 		try {
 			await einreihen(bon.id);
 		} catch (err) {
-			// Wie beim Reprocess: ohne Job bliebe er fuer immer „wartet".
-			await bonAlsFehlgeschlagenMarkieren(d, bon.id, err instanceof Error ? err.message : String(err));
+			// Wie beim Reprocess: ohne Job bliebe er fuer immer „wartet". Zurueck auf
+			// fehlgeschlagen MIT den Beanstandungen von vorher: bonReaktivieren hat sie geleert,
+			// und ohne den Kein-Bon-Hinweis fehlte beim naechsten Versuch „Doch ein Bon".
+			await bonAlsFehlgeschlagenMarkieren(d, bon.id, err instanceof Error ? err.message : String(err), bon.needsReviewReason);
+			return { ok: true, eingereiht: false };
 		}
-		return { ok: true };
+		return { ok: true, eingereiht: true };
 	}
 
 	// Nur ein ausgelesener Bon verliert hier bloss den Hinweis. Wartet er schon wieder (ein
@@ -57,5 +61,5 @@ export async function dochEinBon(
 		})
 		.where(and(eq(receipts.id, bon.id), eq(receipts.status, bon.status)))
 		.returning({ id: receipts.id });
-	return getroffen.length === 1 ? { ok: true } : SCHON_ENTSCHIEDEN;
+	return getroffen.length === 1 ? { ok: true, eingereiht: false } : SCHON_ENTSCHIEDEN;
 }

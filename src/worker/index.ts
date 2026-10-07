@@ -1,13 +1,14 @@
-import { getBoss, QUEUE_EXTRACT, QUEUE_PAPIERKORB, QUEUE_KI_PRUEFEN, type ExtractJob } from '$lib/server/queue/boss';
+import { getBoss, QUEUE_EXTRACT, type ExtractJob } from '$lib/server/queue/boss';
 import { db } from '$lib/server/db';
 import { papierkorbLeeren } from '$lib/server/bons/papierkorb';
 import { aktuellerProvider, wechselnderProvider } from '$lib/server/ki/aktiv';
-import { hauptErreichbar, hauptPruefen } from '$lib/server/ki/umschalten';
-import { echteUmschaltDeps, leseReserveZustand } from '$lib/server/ki/reserve';
+import { hauptErreichbar } from '$lib/server/ki/umschalten';
+import { echteUmschaltDeps, leseReserveZustand, reserveZurueck } from '$lib/server/ki/reserve';
 import { textZielAus } from '$lib/server/extraction';
 import { handleExtractJobs, productionDeps, assertBatchSizeOne, istVoruebergehenderFehler } from './extract-receipt';
 import { notifyMatrix } from '$lib/server/notify';
 import { ocrKonfigurationAusEnv } from '$lib/server/ocr/konfiguration';
+import { zeitplaeneEinrichten, kiPruefenTakt } from './zeitplaene';
 
 // Nachgezogen (Korrekturrunde 3): dieselbe Startprüfung wie in src/matrix/client.ts
 // (K2, Korrekturrunde 2) — dort zuerst nur für bon-matrix eingebaut, hier fehlte sie
@@ -62,33 +63,29 @@ await boss.work<ExtractJob>(
   }
 );
 
-// Der Papierkorb leert sich selbst. schedule() ist idempotent: ein Neustart schreibt denselben
-// Zeitplan neu, es entsteht kein zweiter.
-await boss.schedule(QUEUE_PAPIERKORB, '30 4 * * *', null, { tz: 'Europe/Berlin' });
-await boss.work(QUEUE_PAPIERKORB, async () => {
-  const n = await papierkorbLeeren(db, new Date());
-  if (n > 0) console.log(`[worker] Papierkorb: ${n} Bon(s) nach 30 Tagen endgültig gelöscht`);
-});
-
-// Cloud-Reserve (Entwurf 2026-10-01): solange die Reserve liest, alle 5 Minuten den Mac anfragen
-// und zurueckschalten, sobald er antwortet. Ohne aktive Reserve tut der Auftrag nichts. Ein
-// Fehler hier darf nichts mitreissen — er wird geloggt, beim naechsten Takt geht es weiter.
-await boss.schedule(QUEUE_KI_PRUEFEN, '*/5 * * * *', null, { tz: 'Europe/Berlin' });
-await boss.work(QUEUE_KI_PRUEFEN, async () => {
-  try {
-    const a = await aktuellerProvider();
-    const reserve = a.reserve;
-    if (!reserve) return;
-    const ergebnis = await hauptPruefen({
-      reserveAktivSeit: async () => (await leseReserveZustand()).aktivSeit,
-      probe: () => hauptErreichbar(textZielAus(a.konfig)),
-      zurueckschalten: (anlass) => echteUmschaltDeps(reserve).zurueckschalten(anlass)
-    });
-    if (ergebnis === 'weiter') console.log('[worker] Mac weiter nicht erreichbar, die Reserve liest');
-  } catch (err) {
-    console.error('[worker] Pruefung des Hauptanbieters fehlgeschlagen', err instanceof Error ? err.message : String(err));
+// Zeitplaene (src/worker/zeitplaene.ts): Papierkorb leeren, Hauptanbieter pruefen (4.4, 4.6).
+await zeitplaeneEinrichten(
+  {
+    schedule: (name, cron, data, optionen) => boss.schedule(name, cron, data, optionen),
+    work: (name, optionen, auftrag) => boss.work(name, optionen, () => auftrag())
+  },
+  {
+    papierkorb: async () => {
+      const n = await papierkorbLeeren(db, new Date());
+      if (n > 0) console.log(`[worker] Papierkorb: ${n} Bon(s) nach 30 Tagen endgültig gelöscht`);
+    },
+    kiPruefen: async () => {
+      await kiPruefenTakt({
+        aufloesen: aktuellerProvider,
+        reserveAktivSeit: async () => (await leseReserveZustand()).aktivSeit,
+        probe: (k) => hauptErreichbar(textZielAus(k)),
+        zurueckschalten: (r, anlass) => echteUmschaltDeps(r).zurueckschalten(anlass),
+        aufraeumen: (anlass) => reserveZurueck(db, anlass),
+        konsole: console
+      });
+    }
   }
-});
+);
 
 // Die OCR-Engine steht bewusst MIT in dieser Zeile. Bis zum 2026-09-16 meldete der
 // Worker nur den Extraktions-Anbieter — nach dem Umstellen auf PaddleOCR liess sich der

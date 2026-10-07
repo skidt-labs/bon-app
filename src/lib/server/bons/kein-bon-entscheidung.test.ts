@@ -50,7 +50,7 @@ describe('dochEinBon', () => {
 	it('reiht einen fehlgeschlagenen Bon ohne Vorpruefung neu ein', async () => {
 		mocks.bon = { id: 'r1', status: 'failed', needsReviewReason: ['kein_bon_ohne_preise'] };
 		const einreihen = vi.fn(async () => {});
-		expect(await dochEinBon(fakeDb, ich, 'r1', einreihen)).toEqual({ ok: true });
+		expect(await dochEinBon(fakeDb, ich, 'r1', einreihen)).toEqual({ ok: true, eingereiht: true });
 		expect(einreihen).toHaveBeenCalledWith('r1');
 	});
 
@@ -62,13 +62,15 @@ describe('dochEinBon', () => {
 		expect(einreihen).not.toHaveBeenCalled();
 	});
 
-	it('markiert ihn als fehlgeschlagen, wenn das Einreihen scheitert', async () => {
+	// 2.11: vorher meldete die Antwort Erfolg, und der Kein-Bon-Hinweis war danach weg.
+	it('sagt eingereiht:false und setzt den Kein-Bon-Hinweis wieder, wenn das Einreihen scheitert', async () => {
 		mocks.bon = { id: 'r1', status: 'failed', needsReviewReason: ['kein_bon_leer'] };
 		const einreihen = vi.fn(async () => {
 			throw new Error('Warteschlange weg');
 		});
-		expect(await dochEinBon(fakeDb, ich, 'r1', einreihen)).toEqual({ ok: true });
-		expect(mocks.fehlgeschlagen).toHaveBeenCalled();
+		const r = await dochEinBon(fakeDb, ich, 'r1', einreihen);
+		expect(mocks.fehlgeschlagen).toHaveBeenCalledWith(fakeDb, 'r1', 'Warteschlange weg', ['kein_bon_leer']);
+		expect(r).toEqual({ ok: true, eingereiht: false });
 	});
 
 	// Pruefung 27.09.2026: ein zweiter Klick, waehrend der Bon schon wieder wartet, bekam 200.
@@ -86,7 +88,7 @@ describe('dochEinBon', () => {
 	it('nimmt bei einem gelesenen Bon nur den Hinweis heraus', async () => {
 		mocks.bon = { id: 'r1', status: 'review', needsReviewReason: ['sum_mismatch', 'kein_bon_kartenbeleg'] };
 		const einreihen = vi.fn(async () => {});
-		expect(await dochEinBon(fakeDb, ich, 'r1', einreihen)).toEqual({ ok: true });
+		expect(await dochEinBon(fakeDb, ich, 'r1', einreihen)).toEqual({ ok: true, eingereiht: false });
 		expect(einreihen).not.toHaveBeenCalled();
 		expect(mocks.updates).toHaveLength(1);
 	});

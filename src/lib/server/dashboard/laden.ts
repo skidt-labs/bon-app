@@ -1,9 +1,6 @@
-import { count, eq } from 'drizzle-orm';
 import type { db as Db } from '$lib/server/db';
-import { receipts, receiptItems } from '$lib/server/db/schema';
-import { listeLaden, zaehlerLaden } from '$lib/server/bons/liste';
+import { listeLaden, zaehlerLaden, kategorienStandLaden } from '$lib/server/bons/liste';
 import { monatszahlenLaden } from '$lib/server/berichte/monatszahlen';
-import { sichtbareBons } from '$lib/server/zugriff/sichtbar';
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
 import { aktuellerMonat } from '$lib/server/zeit';
 
@@ -17,18 +14,14 @@ const VORSCHAU = 5;
  */
 export async function startseiteLaden(db: typeof Db, k: Zugriffskontext) {
 	const monat = aktuellerMonat();
-	const [zaehler, wartend, zahlen, [kategorien]] = await Promise.all([
+	const [zaehler, wartend, zahlen, kategorien] = await Promise.all([
 		zaehlerLaden(db, k),
 		listeLaden(db, k, { status: 'brauchtDich', monat: null, haendler: null, suche: null }),
 		monatszahlenLaden(db, k, monat),
 		// Wie viele Positionen ueberhaupt schon eine Kategorie tragen. Die Startseite sagt
 		// damit „1 von 140" statt einer leeren Kachel ohne Erklaerung: der Grund fuer die
 		// Leere ist wichtiger als die Leere.
-		db
-			.select({ mitKategorie: count(receiptItems.categoryId), gesamt: count() })
-			.from(receiptItems)
-			.innerJoin(receipts, eq(receipts.id, receiptItems.receiptId))
-			.where(sichtbareBons(k))
+		kategorienStandLaden(db, k)
 	]);
 
 	return {

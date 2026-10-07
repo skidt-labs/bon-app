@@ -8,5 +8,5 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 	if (!locals.user) error(401, 'Nicht angemeldet');
 	const r = await ausPapierkorbHolen(db, locals.zugriff!, params.id);
 	if (!r.ok) error(r.status, r.meldung);
-	return json({ ok: true });
+	return json({ ok: true, eingereiht: r.eingereiht, status: r.status });
 };

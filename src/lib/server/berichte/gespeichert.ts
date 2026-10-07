@@ -3,6 +3,7 @@ import type { db as Db } from '$lib/server/db';
 import { gespeicherteBerichte, users } from '$lib/server/db/schema';
 import { darfGeteiltesVerwalten, type Zugriffskontext } from '$lib/server/zugriff/kontext';
 import { filterAusAdresse, merkmalParameter, zeitraumParameter, type BerichtFilter } from '$lib/berichte/filter';
+import { filterAufloesen, stammdatenLaden } from './aufloesen';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 export const NAME_HOECHSTENS = 60;
@@ -103,10 +104,31 @@ export function alsFilter(
 
 const sortiert = (r: Record<string, string>) => JSON.stringify(Object.entries(r).sort(([a], [b]) => a.localeCompare(b)));
 
-/** Ob der gezeigte Filter vom gespeicherten abweicht („Änderungen speichern"). */
-export function istGeaendert(b: Pick<GespeicherterBericht, 'parameter' | 'zeitraum'>, filter: BerichtFilter): boolean {
-	if (sortiert(b.parameter) !== sortiert(merkmalParameter(filter))) return true;
-	return b.zeitraum !== null && sortiert(b.zeitraum) !== sortiert(zeitraumParameter(filter.zeitraum));
+/**
+ * Der gespeicherte Bericht, wie er HEUTE wirkt: Laeden, Kategorien, Personen und Toepfe,
+ * die es nicht (mehr) gibt, fallen weg — dieselbe Aufloesung wie beim Anzeigen. Erst damit
+ * vergleicht istGeaendert; sonst stuende nach jedem geloeschten Laden „Änderungen
+ * speichern", obwohl niemand etwas geaendert hat (Sammelfassung 3.6). Gespeichert wird
+ * weiterhin nur, wenn jemand speichert.
+ */
+export async function gespeichertWirksam(
+	db: typeof Db,
+	k: Zugriffskontext,
+	b: Pick<GespeicherterBericht, 'parameter' | 'zeitraum'>,
+	heute: string
+): Promise<BerichtFilter> {
+	const roh = alsFilter(b, heute).filter;
+	if (roh.laden.length + roh.kategorie.length + roh.person.length + roh.topf.length === 0) return roh;
+	return (await filterAufloesen(db, k, roh, await stammdatenLaden(db, k), [])).filter;
+}
+
+/**
+ * Ob der gezeigte Filter vom gespeicherten abweicht („Änderungen speichern").
+ * `wirksam` ist der gespeicherte Bericht nach gespeichertWirksam.
+ */
+export function istGeaendert(b: Pick<GespeicherterBericht, 'zeitraum'>, wirksam: BerichtFilter, gezeigt: BerichtFilter): boolean {
+	if (sortiert(merkmalParameter(wirksam)) !== sortiert(merkmalParameter(gezeigt))) return true;
+	return b.zeitraum !== null && sortiert(b.zeitraum) !== sortiert(zeitraumParameter(gezeigt.zeitraum));
 }
 
 export async function berichtSpeichern(

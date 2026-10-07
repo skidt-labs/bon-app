@@ -10,6 +10,8 @@ import {
 	instanz
 } from '$lib/server/db/schema';
 
+type Verbindung = typeof db;
+
 /**
  * Die Betriebsseite arbeitet mit ZAEHLERSTAENDEN, nie mit Inhalten.
  *
@@ -27,18 +29,25 @@ export type HaushaltsZeile = {
 	name: string;
 	mitglieder: number;
 	bons: number;
+	/** Davon im Papierkorb (2.4) — die Gesamtzahl bleibt, sie sperrt das Loeschen des Haushalts. */
+	imPapierkorb: number;
 	angelegtAm: Date;
 };
 
-export async function haushalteUebersicht(): Promise<HaushaltsZeile[]> {
-	// Zwei Unterabfragen statt zweier Verbunde: ein Verbund ueber beide zaehlte das
-	// Kreuzprodukt (drei Mitglieder mal zehn Bons ergaeben dreissig).
-	return db
+export async function haushalteUebersicht(d: Verbindung = db): Promise<HaushaltsZeile[]> {
+	// Unterabfragen statt Verbunden: ein Verbund über Mitglieder und Bons zählte das
+	// Kreuzprodukt (drei Mitglieder mal zehn Bons ergäben dreißig).
+	// `${households}.${households.id}` statt `${households.id}`: in einer Abfrage ueber EINE
+	// Tabelle schreibt drizzle Spalten ohne Tabellennamen, und ein nacktes "id" meinte in der
+	// Unterabfrage die Spalte der inneren Tabelle — die Uebersicht zeigte bei jedem Haushalt
+	// 0 Mitglieder und 0 Bons (gefunden 07.10.2026 mit verwaltung.db.test.ts gegen bon_test).
+	return d
 		.select({
 			id: households.id,
 			name: households.name,
-			mitglieder: sql<number>`(select count(*)::int from ${householdMembers} where ${householdMembers.householdId} = ${households.id})`,
-			bons: sql<number>`(select count(*)::int from ${receipts} where ${receipts.householdId} = ${households.id})`,
+			mitglieder: sql<number>`(select count(*)::int from ${householdMembers} where ${householdMembers.householdId} = ${households}.${households.id})`,
+			bons: sql<number>`(select count(*)::int from ${receipts} where ${receipts.householdId} = ${households}.${households.id})`,
+			imPapierkorb: sql<number>`(select count(*)::int from ${receipts} where ${receipts.householdId} = ${households}.${households.id} and ${receipts.status} = 'verworfen')`,
 			angelegtAm: households.createdAt
 		})
 		.from(households)
@@ -112,6 +121,7 @@ export async function haushaltLoeschen(householdId: string): Promise<void> {
 			tx.select({ n: count() }).from(householdMembers).where(eq(householdMembers.householdId, householdId)),
 			tx.select({ n: count() }).from(receipts).where(eq(receipts.householdId, householdId))
 		]);
+		// Zaehlt bewusst AUCH den Papierkorb: solange ein verworfener Bon (samt Bildern) im Haushalt liegt, ist er nicht leer (2.4).
 		if (m.n > 0 || b.n > 0) throw new HaushaltNichtLeer();
 		await tx.delete(households).where(eq(households.id, householdId));
 	});

@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+import { statusSperrText } from '$lib/bons/sperrtext';
 import { db } from '$lib/server/db';
 import { bonLaden } from '$lib/server/bons/liste';
 import {
@@ -35,12 +36,7 @@ export const PUT: RequestHandler = async ({ params, request, locals }) => {
 	// ging schief, und dann traegt ihn eben ein Mensch ein (27.09.2026). Beim Speichern
 	// wird er zu einem Bon in Pruefung (korrekturenAnwenden).
 	if (receipt.status !== 'review' && receipt.status !== 'confirmed' && receipt.status !== 'failed') {
-		error(
-			409,
-			receipt.status === 'doppelt'
-				? 'Dieser Bon ist als doppelt verworfen und kann darum nicht geändert werden.'
-				: 'Dieser Bon wird gerade ausgelesen und kann darum nicht geändert werden.'
-		);
+		error(409, statusSperrText(receipt.status));
 	}
 
 	const geparst = korrekturenSchema.safeParse(await request.json());

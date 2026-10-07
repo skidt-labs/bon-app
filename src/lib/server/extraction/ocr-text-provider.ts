@@ -6,6 +6,7 @@ import type { OcrQualitaet } from '../ocr/qualitaet';
 import { ExtractionSchemaError, ExtractionHttpError, ExtractionTruncatedError } from './types';
 import { extractedReceiptSchema, bonResponseJsonSchema } from './schema';
 import type { ExtractedReceipt } from './schema';
+import type { AuftragsFrist } from '../queue/fristen';
 import { SYSTEM_PROMPT } from './prompt';
 import { OCR_PROMPT_ZUSATZ, OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR } from './ocr-prompt-zusatz';
 import { stripCodeFence, redactSecret, parseUsage, STANDARD_ZEITLIMIT_MS } from './openai-compat';
@@ -214,7 +215,9 @@ export type TextModellAntwort = Pick<ExtractionResult, 'receipt' | 'usage' | 'ra
 export type TextModellAufruf = (
   text: string,
   qualitaet: OcrQualitaet,
-  signal: AbortSignal | undefined
+  signal: AbortSignal | undefined,
+  /** 4.5: die Frist des Auftrags — fehlt sie (Testknopf, Tests), gilt keine. */
+  frist?: AuftragsFrist
 ) => Promise<TextModellAntwort>;
 
 /**
@@ -438,7 +441,7 @@ export function createOcrTextProvider(opts: {
         throw new BonUnlesbarError(text, qualitaet, lauf, zeilen);
       }
 
-      const antwort = await modellAufruf(text, qualitaet, signal);
+      const antwort = await modellAufruf(text, qualitaet, signal, extraOpts?.frist);
 
       // ocrText: der Text, der tatsaechlich an das Modell ging (Entwurf E5) — der
       // einzige Beleg, was gelesen wurde, unabhaengig davon, ob das Modell ihn richtig

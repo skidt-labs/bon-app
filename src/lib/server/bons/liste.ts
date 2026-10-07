@@ -1,7 +1,7 @@
-import { and, asc, count, desc, eq, exists, gte, ilike, inArray, lt, or, sql } from 'drizzle-orm';
+import { and, asc, count, desc, eq, exists, gte, ilike, inArray, lt, ne, or, sql } from 'drizzle-orm';
 import { bildVersion } from '$lib/bons/anzeige';
 import type { db as Db } from '$lib/server/db';
-import { receipts, receiptItems } from '$lib/server/db/schema';
+import { receipts, receiptItems, receiptStatus } from '$lib/server/db/schema';
 import { monatsgrenzen } from '$lib/server/zeit';
 import { sichtbareBons } from '$lib/server/zugriff/sichtbar';
 import { darfBonVerwerfen, type Zugriffskontext } from '$lib/server/zugriff/kontext';
@@ -61,8 +61,9 @@ export function statusListe(f: StatusFilter): ReceiptStatus[] {
 		case 'bestaetigt':
 			return ['confirmed'];
 		case 'alle':
-			// Alles ausser dem Papierkorb — der hat seinen eigenen Filter.
-			return ['pending', 'extracting', 'review', 'confirmed', 'failed', 'doppelt'];
+			// Alles ausser dem Papierkorb — der hat seinen eigenen Filter. Aus dem Enum
+			// abgeleitet: ein neuer Status faellt sonst still aus „alle" heraus (2.5).
+			return receiptStatus.enumValues.filter((s) => s !== 'verworfen');
 		case 'papierkorb':
 			return ['verworfen'];
 	}
@@ -151,6 +152,20 @@ export async function zaehlerLaden(db: typeof Db, k: Zugriffskontext): Promise<Z
 	return zaehlerAus(zeilen);
 }
 
+/**
+ * Wie viele Positionen schon eine Kategorie tragen — fuer Startseite und Budgets („1 von 140").
+ * Eine Stelle fuer beide, mit derselben Sichtbarkeit wie die Liste. Der Papierkorb zaehlt nicht
+ * mit (2.4); ein Doppel schon — er ist ein erfasster Bon.
+ */
+export async function kategorienStandLaden(db: typeof Db, k: Zugriffskontext): Promise<{ mitKategorie: number; gesamt: number }> {
+	const [z] = await db
+		.select({ mitKategorie: count(receiptItems.categoryId), gesamt: count() })
+		.from(receiptItems)
+		.innerJoin(receipts, eq(receipts.id, receiptItems.receiptId))
+		.where(and(sichtbareBons(k), ne(receipts.status, 'verworfen')));
+	return { mitKategorie: Number(z?.mitKategorie ?? 0), gesamt: Number(z?.gesamt ?? 0) };
+}
+
 export async function listeLaden(
 	db: typeof Db,
 	k: Zugriffskontext,
@@ -194,7 +209,11 @@ export async function listeLaden(
 				uploadedBy: receipts.uploadedBy,
 				verworfenAm: receipts.verworfenAm,
 				imagePath: receipts.imagePath,
-				positionen: sql<number>`(select count(*)::int from ${receiptItems} where ${receiptItems.receiptId} = ${receipts.id})`
+				// `${receipts}.${receipts.id}` statt `${receipts.id}`: in einer Abfrage ueber EINE
+				// Tabelle schreibt drizzle Spalten ohne Tabellennamen, und ein nacktes "id" meinte
+				// in der Unterabfrage receipt_items.id — die Liste zeigte bei jedem Bon 0 Positionen
+				// (gefunden 07.10.2026 mit liste.db.test.ts gegen bon_test).
+				positionen: sql<number>`(select count(*)::int from ${receiptItems} where ${receiptItems.receiptId} = ${receipts}.${receipts.id})`
 			})
 			.from(receipts)
 			.where(and(...bedingungen))
@@ -258,10 +277,20 @@ export async function bonAnlegen(
  * geklappt hat. Kein Haushaltsfilter: die Id ist an dieser Stelle bereits bekannt und
  * geprueft (frisch angelegt oder ueber bonLaden/bonReaktivieren geladen).
  */
-export async function bonAlsFehlgeschlagenMarkieren(db: typeof Db, bonId: string, reason: string) {
+export async function bonAlsFehlgeschlagenMarkieren(
+	db: typeof Db,
+	bonId: string,
+	reason: string,
+	/** Beanstandungen von vorher wieder einsetzen — „Doch ein Bon" hat sie beim Reaktivieren geleert. */
+	beanstandungen?: string[] | null
+) {
 	await db
 		.update(receipts)
-		.set({ status: 'failed', failureReason: reason.slice(0, 500) })
+		.set({
+			status: 'failed',
+			failureReason: reason.slice(0, 500),
+			...(beanstandungen !== undefined ? { needsReviewReason: beanstandungen } : {})
+		})
 		// Nur, solange er noch wartet: hat der Job es trotz Fehlermeldung in die Schlange
 		// geschafft und ist schon durch, bliebe sonst ein fertiger Bon als „fehlgeschlagen" stehen.
 		.where(and(eq(receipts.id, bonId), inArray(receipts.status, ['pending', 'extracting'])));

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { BerichtFilter } from '$lib/berichte/filter';
-	import { adresse, jahresAuswahl, zeitraumName, zeitwahlKacheln } from '$lib/berichte/zeitleiste';
+	import { adresse, jahresAuswahl, zeitraumName, zeitwahlJahrZiel, zeitwahlKacheln } from '$lib/berichte/zeitleiste';
 	import { jahrVon, monatVon } from '$lib/berichte/kalender';
 	import { formatCents } from '$lib/money';
 	import Aufklapper from './Aufklapper.svelte';
@@ -20,14 +20,17 @@
 	} = $props();
 
 	const z = $derived(filter.zeitraum);
-	const laufendesJahr = $derived(jahrVon(heute));
-	// Das Jahr der Kacheln. Blaettern geht nur hier drin (Knoepfe, kein Link); ohne
-	// JavaScript bleibt es beim Jahr des Zeitraums — die Kacheln selbst sind Links.
+	// Das Jahr der Kacheln. ‹ und › sind Links auf denselben Monat im Vor-/Folgejahr (ohne
+	// JavaScript laden sie die Seite neu); mit JavaScript blaettern sie nur die Kacheln hier drin
+	// (Sammelfassung 3.5).
 	let angezeigt = $state<number | null>(null);
 	const jahr = $derived(
 		angezeigt ?? (z.art === 'jahr' ? z.jahr : jahrVon(z.art === 'monat' ? `${z.monat}-01` : z.bis))
 	);
 	const kacheln = $derived(zeitwahlKacheln(jahr, heute, monatsSummen));
+	const monatDerKacheln = $derived(z.art === 'monat' ? z.monat : monatVon(heute));
+	const jahrZurueck = $derived(zeitwahlJahrZiel(monatDerKacheln, jahr, -1, heute));
+	const jahrVor = $derived(zeitwahlJahrZiel(monatDerKacheln, jahr, 1, heute));
 	const link = (f: BerichtFilter) => adresse(pfad, f, zusatz);
 </script>
 
@@ -78,15 +81,36 @@
 			</ul>
 		{:else}
 			<div class="mb-3 flex items-center justify-between text-[13px] font-bold">
-				<button type="button" onclick={() => (angezeigt = jahr - 1)} aria-label="Jahr {jahr - 1}" class="h-9 w-9 rounded-full border border-linie">‹</button>
+				<!-- Mit JavaScript blaettert der Link nur die Kacheln; kein Vorladen der Zielseite. -->
+				{#if jahrZurueck}
+					<a
+						href={link({ ...filter, zeitraum: jahrZurueck })}
+						data-sveltekit-preload-data="off"
+						onclick={(e) => {
+							e.preventDefault();
+							angezeigt = jahr - 1;
+						}}
+						aria-label="Jahr {jahr - 1}"
+						class="grid h-9 w-9 place-items-center rounded-full border border-linie">‹</a
+					>
+				{:else}
+					<span class="grid h-9 w-9 place-items-center rounded-full border border-linie opacity-30" aria-hidden="true">‹</span>
+				{/if}
 				<span class="tabular-nums">{jahr}</span>
-				<button
-					type="button"
-					onclick={() => (angezeigt = jahr + 1)}
-					disabled={jahr >= laufendesJahr}
-					aria-label="Jahr {jahr + 1}"
-					class="h-9 w-9 rounded-full border border-linie disabled:opacity-30">›</button
-				>
+				{#if jahrVor}
+					<a
+						href={link({ ...filter, zeitraum: jahrVor })}
+						data-sveltekit-preload-data="off"
+						onclick={(e) => {
+							e.preventDefault();
+							angezeigt = jahr + 1;
+						}}
+						aria-label="Jahr {jahr + 1}"
+						class="grid h-9 w-9 place-items-center rounded-full border border-linie">›</a
+					>
+				{:else}
+					<span class="grid h-9 w-9 place-items-center rounded-full border border-linie opacity-30" aria-hidden="true">›</span>
+				{/if}
 			</div>
 			<ul class="grid grid-cols-3 gap-2 text-[12.5px]">
 				{#each kacheln as kachel (kachel.monat)}

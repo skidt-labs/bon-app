@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { anzahlBons } from '$lib/bons/anzeige';
 	import Seite from '$lib/client/geruest/Seite.svelte';
 	import Einstellungsleiste from '$lib/client/geruest/Einstellungsleiste.svelte';
 	import { enhance } from '$app/forms';
@@ -56,7 +57,7 @@
 					<span class="mt-0.5 block text-xs text-gray-500">{ROLLEN_TEXT[m.rolle] ?? m.rolle}</span>
 				</span>
 				<span class="flex shrink-0 items-center gap-2">
-					<span class="text-sm tabular-nums">{m.erfasst} Bons</span>
+					<span class="text-sm tabular-nums">{anzahlBons(m.erfasst)}</span>
 					{#if data.darfVerwalten}
 						<form method="POST" action="?/rolle" use:enhance class="contents">
 							<input type="hidden" name="zielUserId" value={m.id} />

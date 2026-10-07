@@ -71,7 +71,14 @@ export const HAUSHALT_TABELLEN_GEZAEHLT = [
 export const HAUSHALT_TABELLEN_AUSGENOMMEN: Record<string, string> = {
 	einladungen:
 		'Kaskadiert beim Loeschen des Haushalts automatisch weg (onDelete: cascade) — ' +
-		'eine offene, nie eingeloeste Einladung ist kein Datum, dessen Verlust zaehlt.'
+		'eine offene, nie eingeloeste Einladung ist kein Datum, dessen Verlust zaehlt.',
+	// Sammelfassung 0.11.0: fehlte seit den gespeicherten Berichten; erst die Probe gegen
+	// bon_test hat es gezeigt.
+	gespeicherte_berichte:
+		'Kaskadiert beim Loeschen des Haushalts automatisch weg (onDelete: cascade) — ' +
+		'ein gespeicherter Bericht ist nur ein Filter ueber die Bons, Toepfe und Produkte DIESES ' +
+		'Haushalts. Ohne sie (sonst waere er nicht leer) zeigt er nichts und ist in Sekunden neu ' +
+		'angelegt; ihn zu zaehlen, sperrte das Einloesen ohne einen Grund, den die Meldung nennt.'
 };
 
 /**

@@ -3,7 +3,7 @@ import { env } from '$env/dynamic/private';
 import { direktchatFuer } from '$lib/server/matrix/links';
 import { enqueueMatrixBericht } from '$lib/server/queue/boss';
 import { haushaltsName } from '$lib/server/betrieb/verwaltung';
-import { matrixZusammenfassung } from '$lib/server/berichte/zusammenfassung';
+import { matrixZusammenfassung, TEXT_HOECHSTENS } from '$lib/server/berichte/zusammenfassung';
 import { db } from '$lib/server/db';
 import { berichtLaden } from '$lib/server/berichte/abfragen';
 import { filterOptionen, istWahlmerkmal } from '$lib/server/berichte/optionen';
@@ -15,7 +15,8 @@ import {
 	berichtUmbenennen,
 	gespeichertLaden,
 	gespeicherteListe,
-	istGeaendert
+	istGeaendert,
+	gespeichertWirksam
 } from '$lib/server/berichte/gespeichert';
 import { heutigerTag } from '$lib/server/zeit';
 import { filterAlsAdresse, filterAusAdresse, MERKMALE, type Merkmal } from '$lib/berichte/filter';
@@ -44,10 +45,13 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 	const wahl = wahlRoh !== null && MERKMALE.includes(wahlRoh as Merkmal) ? (wahlRoh as Merkmal) : null;
 	if (wahlRoh !== null && wahl === null) hinweise.push(`„${wahlRoh}" ist kein Filter — ignoriert.`);
 
-	const [bericht, gespeicherte, chat] = await Promise.all([
+	const [bericht, gespeicherte, chat, gespeichertBereinigt] = await Promise.all([
 		berichtLaden(db, k, gelesen.filter, heute),
 		gespeicherteListe(db, k),
-		direktchatFuer(locals.user.id)
+		direktchatFuer(locals.user.id),
+		// Nur „?bericht=…": der gezeigte Filter IST der gespeicherte, schon bereinigt. Traegt
+		// die Adresse eigene Filter, wird der gespeicherte eigens bereinigt (Sammelfassung 3.6).
+		gespeichert && !nurBericht ? gespeichertWirksam(db, k, gespeichert, heute) : Promise.resolve(null)
 	]);
 	const optionen = wahl !== null && istWahlmerkmal(wahl) ? await filterOptionen(db, k, bericht.filter, wahl) : null;
 
@@ -63,7 +67,7 @@ export const load: PageServerLoad = async ({ url, locals }) => {
 		/** Ob „per Matrix" gehen kann — sonst sagt die Seite, was fehlt. */
 		matrix: (chat === null ? 'nicht_gekoppelt' : chat.raum === null ? 'kein_chat' : 'bereit') as 'bereit' | 'nicht_gekoppelt' | 'kein_chat',
 		aktiv: gespeichert
-			? { id: gespeichert.id, name: gespeichert.name, darfAendern: gespeichert.darfAendern, geaendert: istGeaendert(gespeichert, bericht.filter) }
+			? { id: gespeichert.id, name: gespeichert.name, darfAendern: gespeichert.darfAendern, geaendert: istGeaendert(gespeichert, gespeichertBereinigt ?? bericht.filter, bericht.filter) }
 			: null
 	};
 };
@@ -89,7 +93,13 @@ export const actions: Actions = {
 		const bericht = await berichtLaden(db, k, filterAus(form), heute);
 		const link = env.ORIGIN ? `${env.ORIGIN}/reports?${filterAlsAdresse(bericht.filter)}` : null;
 		const text = matrixZusammenfassung(bericht, (await haushaltsName(k.haushaltId)) ?? 'Haushalt', link);
-		await enqueueMatrixBericht({ userId: locals.user.id, text });
+		// Letzte Sicherung: was auch gekuerzt nicht passt, verwuerfe der Bot still (Sammelfassung 3.10).
+		if (text.length > TEXT_HOECHSTENS) {
+			return fail(400, { grund: 'Die Zusammenfassung wäre für eine Matrix-Nachricht zu lang — bitte mit weniger Filtern senden.' });
+		}
+		if (!(await enqueueMatrixBericht({ userId: locals.user.id, text }))) {
+			return fail(429, { grund: 'Ein Bericht ist gerade unterwegs — bitte einen Moment warten.' });
+		}
 		// Zurueck auf DENSELBEN Bericht, wie die anderen Aktionen: ein Formular an
 		// „?/matrix" ersetzt sonst die Adresse, und die Seite zeigte den laufenden Monat
 		// ohne Filter. Nach dem Umleiten schickt Neuladen auch nichts erneut.

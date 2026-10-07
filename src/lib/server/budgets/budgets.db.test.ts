@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { count, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
 import {
 	budgets,
@@ -11,13 +11,14 @@ import {
 	householdMembers
 } from '$lib/server/db/schema';
 import { randomUUID } from 'node:crypto';
-import { budgetAnlegen, betragSetzen, kategorieLoesen, kategorieZuordnen } from './verwaltung';
+import { budgetAnlegen, betragSetzen, budgetLoeschen, kategorieLoesen, kategorieZuordnen } from './verwaltung';
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
+import { testHaushalt, zurueckgerollt, type Tx } from '$lib/server/db/testdaten';
 
 /**
- * Live-Waechter gegen die LAUFENDE Datenbank — hinter RUN_DB_TESTS=1:
+ * Live-Waechter gegen die Test-Datenbank — hinter RUN_DB_TESTS=1:
  *
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/budgets/budgets.db.test.ts
  *
  * Schreibt in einer Transaktion und wirft am Ende, damit Postgres alles zuruecknimmt.
@@ -32,132 +33,139 @@ import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
  * „weitermachen nach einem Fehler".
  */
 const AUS = process.env.RUN_DB_TESTS !== '1';
-const ROLLBACK = new Error('rollback');
+
+/** Eine Kategorie aus dem Baum, den die Migrationen in bon_test angelegt haben. */
+async function kategorieAusBaum(tx: Tx): Promise<string> {
+	const [k] = await tx.select({ id: categories.id }).from(categories).limit(1);
+	if (!k) throw new Error('Kein Kategoriebaum in der Test-Datenbank — Migrationen gegen bon_test einspielen.');
+	return k.id;
+}
+
+/**
+ * Nach dem Zurueckrollen: weder Topf noch Haushalt — GEZIELT, nicht ueber die Gesamtzahl aller
+ * Toepfe. Im parallelen Gesamtlauf legt einladungen.db.test.ts committete Toepfe an und raeumt
+ * sie wieder weg; ein Vergleich der Gesamtzahl wuerde davon zufaellig rot.
+ */
+async function nichtsGeblieben(haushaltId: string): Promise<void> {
+	expect(haushaltId).not.toBe('');
+	expect(await db.select({ id: budgets.id }).from(budgets).where(eq(budgets.householdId, haushaltId))).toHaveLength(0);
+	expect(await db.select({ id: households.id }).from(households).where(eq(households.id, haushaltId))).toHaveLength(0);
+}
 
 describe.skipIf(AUS)('Budget-Zuordnungen gegen die echte Datenbank', () => {
 	it('laesst eine Kategorie nur in EINEM laufenden Topf zu, nach Beendigung wieder frei', async () => {
-		const [haushalt] = await db.select({ id: households.id }).from(households).limit(1);
-		const [kategorie] = await db.select({ id: categories.id }).from(categories).limit(1);
-		if (!haushalt || !kategorie) return;
-		const [{ vorher }] = await db.select({ vorher: count() }).from(budgets);
+		let hid = '';
+		await zurueckgerollt(async (tx) => {
+			const { haushaltId } = await testHaushalt(tx);
+			hid = haushaltId;
+			const kategorieId = await kategorieAusBaum(tx);
 
-		await expect(
-			db.transaction(async (tx) => {
-				const [topfA] = await tx
-					.insert(budgets)
-					.values({ householdId: haushalt.id, name: 'Waechter A' })
-					.returning({ id: budgets.id });
-				const [topfB] = await tx
-					.insert(budgets)
-					.values({ householdId: haushalt.id, name: 'Waechter B' })
-					.returning({ id: budgets.id });
+			const [topfA] = await tx
+				.insert(budgets)
+				.values({ householdId: haushaltId, name: 'Waechter A' })
+				.returning({ id: budgets.id });
+			const [topfB] = await tx
+				.insert(budgets)
+				.values({ householdId: haushaltId, name: 'Waechter B' })
+				.returning({ id: budgets.id });
 
-				// Ein Betrag je Topf und Monat. Zwei Angaben fuer denselben Monat waeren zwei
-				// Wahrheiten fuer denselben Zeitraum.
-				await tx
-					.insert(budgetBetraege)
-					.values({ budgetId: topfA.id, giltAb: '2026-09-01', amountCents: 25000 });
-				await expect(
-					tx.transaction(async (sp) => {
-						await sp
-							.insert(budgetBetraege)
-							.values({ budgetId: topfA.id, giltAb: '2026-09-01', amountCents: 30000 });
-					})
-				).rejects.toThrow();
+			// Ein Betrag je Topf und Monat. Zwei Angaben fuer denselben Monat waeren zwei
+			// Wahrheiten fuer denselben Zeitraum.
+			await tx
+				.insert(budgetBetraege)
+				.values({ budgetId: topfA.id, giltAb: '2026-09-01', amountCents: 25000 });
+			await expect(
+				tx.transaction(async (sp) => {
+					await sp
+						.insert(budgetBetraege)
+						.values({ budgetId: topfA.id, giltAb: '2026-09-01', amountCents: 30000 });
+				})
+			).rejects.toThrow();
 
-				const [erste] = await tx
-					.insert(budgetKategorien)
-					.values({
-						budgetId: topfA.id,
-						householdId: haushalt.id,
-						categoryId: kategorie.id,
-						giltAb: '2026-09-01'
-					})
-					.returning({ id: budgetKategorien.id });
+			const [erste] = await tx
+				.insert(budgetKategorien)
+				.values({
+					budgetId: topfA.id,
+					householdId: haushaltId,
+					categoryId: kategorieId,
+					giltAb: '2026-09-01'
+				})
+				.returning({ id: budgetKategorien.id });
 
-				// Dieselbe Kategorie ein zweites Mal, laufend: die Datenbank muss ablehnen.
-				await expect(
-					tx.transaction(async (sp) => {
-						await sp.insert(budgetKategorien).values({
-							budgetId: topfB.id,
-							householdId: haushalt.id,
-							categoryId: kategorie.id,
-							giltAb: '2026-09-01'
-						});
-					})
-				).rejects.toThrow();
-
-				// Wird die erste beendet, ist die Kategorie wieder frei — sonst koennte eine
-				// Kategorie nie den Topf wechseln, und genau das soll moeglich sein.
-				await tx
-					.update(budgetKategorien)
-					.set({ giltBis: '2026-09-30' })
-					.where(eq(budgetKategorien.id, erste.id));
-
-				const [zweite] = await tx
-					.insert(budgetKategorien)
-					.values({
+			// Dieselbe Kategorie ein zweites Mal, laufend: die Datenbank muss ablehnen.
+			await expect(
+				tx.transaction(async (sp) => {
+					await sp.insert(budgetKategorien).values({
 						budgetId: topfB.id,
-						householdId: haushalt.id,
-						categoryId: kategorie.id,
-						giltAb: '2026-10-01'
-					})
-					.returning({ id: budgetKategorien.id });
-				expect(zweite.id).toBeTruthy();
+						householdId: haushaltId,
+						categoryId: kategorieId,
+						giltAb: '2026-09-01'
+					});
+				})
+			).rejects.toThrow();
 
-				throw ROLLBACK;
-			})
-		).rejects.toBe(ROLLBACK);
+			// Wird die erste beendet, ist die Kategorie wieder frei — sonst koennte eine
+			// Kategorie nie den Topf wechseln, und genau das soll moeglich sein.
+			await tx
+				.update(budgetKategorien)
+				.set({ giltBis: '2026-09-30' })
+				.where(eq(budgetKategorien.id, erste.id));
 
-		const [{ nachher }] = await db.select({ nachher: count() }).from(budgets);
-		expect(nachher).toBe(vorher);
+			const [zweite] = await tx
+				.insert(budgetKategorien)
+				.values({
+					budgetId: topfB.id,
+					householdId: haushaltId,
+					categoryId: kategorieId,
+					giltAb: '2026-10-01'
+				})
+				.returning({ id: budgetKategorien.id });
+			expect(zweite.id).toBeTruthy();
+
+		});
+
+		await nichtsGeblieben(hid);
 	});
 });
 
 describe.skipIf(AUS)('Verwaltung gegen die echte Datenbank', () => {
 	it('nennt beim Konflikt den Topf, dem die Kategorie schon gehoert', async () => {
-		const [haushalt] = await db.select({ id: households.id }).from(households).limit(1);
-		const [kategorie] = await db.select({ id: categories.id }).from(categories).limit(1);
-		if (!haushalt || !kategorie) return;
-		const k: Zugriffskontext = { haushaltId: haushalt.id, nutzerId: 'test', rolle: 'mitglied' };
-		const [{ vorher }] = await db.select({ vorher: count() }).from(budgets);
+		let hid = '';
+		await zurueckgerollt(async (tx) => {
+			const { k } = await testHaushalt(tx, { rolle: 'mitglied' });
+			hid = k.haushaltId;
+			const kategorieId = await kategorieAusBaum(tx);
+			const a = await budgetAnlegen(tx, k, 'Lebensmittel');
+			const b = await budgetAnlegen(tx, k, 'Haushalt');
+			await kategorieZuordnen(tx, k, a, kategorieId, '2026-09');
 
-		await expect(
-			db.transaction(async (tx) => {
-				const a = await budgetAnlegen(tx, k, 'Lebensmittel');
-				const b = await budgetAnlegen(tx, k, 'Haushalt');
-				await kategorieZuordnen(tx, k, a, kategorie.id, '2026-09');
+			// Derselbe Topf noch einmal: kein Fehler, das Ergebnis stimmt ja schon.
+			await kategorieZuordnen(tx, k, a, kategorieId, '2026-09');
 
-				// Derselbe Topf noch einmal: kein Fehler, das Ergebnis stimmt ja schon.
-				await kategorieZuordnen(tx, k, a, kategorie.id, '2026-09');
+			// Ein anderer Topf: abgelehnt, MIT Namen. Das laeuft hier IN einer
+			// Transaktion — der frueheren Fassung, die den Namen erst nach dem
+			// abgelehnten INSERT holte, waere genau hier die Abfrage ins Leere gelaufen.
+			await expect(kategorieZuordnen(tx, k, b, kategorieId, '2026-09')).rejects.toThrow(
+				/Lebensmittel/
+			);
 
-				// Ein anderer Topf: abgelehnt, MIT Namen. Das laeuft hier IN einer
-				// Transaktion — der frueheren Fassung, die den Namen erst nach dem
-				// abgelehnten INSERT holte, waere genau hier die Abfrage ins Leere gelaufen.
-				await expect(kategorieZuordnen(tx, k, b, kategorie.id, '2026-09')).rejects.toThrow(
-					/Lebensmittel/
-				);
+			// Nach dem Loesen ab Oktober ist sie frei — im September zaehlt sie noch.
+			// Die Topf-Id gehoert seit Befund R18 zwingend dazu: ohne sie traf das
+			// UPDATE jede offene Zuordnung dieser Kategorie im Haushalt. Hier ist es
+			// Topf `a`, dessen Zuordnung beendet werden soll.
+			await kategorieLoesen(tx, k, a, kategorieId, '2026-10');
+			await kategorieZuordnen(tx, k, b, kategorieId, '2026-10');
 
-				// Nach dem Loesen ab Oktober ist sie frei — im September zaehlt sie noch.
-				// Die Topf-Id gehoert seit Befund R18 zwingend dazu: ohne sie traf das
-				// UPDATE jede offene Zuordnung dieser Kategorie im Haushalt. Hier ist es
-				// Topf `a`, dessen Zuordnung beendet werden soll.
-				await kategorieLoesen(tx, k, a, kategorie.id, '2026-10');
-				await kategorieZuordnen(tx, k, b, kategorie.id, '2026-10');
+			// Betrag zweimal fuer denselben Monat heisst aendern, nicht anlegen.
+			await betragSetzen(tx, a, '2026-09', 25000);
+			await betragSetzen(tx, a, '2026-09', 30000);
+			const betraege = await tx.select().from(budgetBetraege).where(eq(budgetBetraege.budgetId, a));
+			expect(betraege).toHaveLength(1);
+			expect(betraege[0].amountCents).toBe(30000);
 
-				// Betrag zweimal fuer denselben Monat heisst aendern, nicht anlegen.
-				await betragSetzen(tx, a, '2026-09', 25000);
-				await betragSetzen(tx, a, '2026-09', 30000);
-				const betraege = await tx.select().from(budgetBetraege).where(eq(budgetBetraege.budgetId, a));
-				expect(betraege).toHaveLength(1);
-				expect(betraege[0].amountCents).toBe(30000);
+		});
 
-				throw ROLLBACK;
-			})
-		).rejects.toBe(ROLLBACK);
-
-		const [{ nachher }] = await db.select({ nachher: count() }).from(budgets);
-		expect(nachher).toBe(vorher);
+		await nichtsGeblieben(hid);
 	});
 
 	it('schreibt den Eigentuemer mit und loest nur den eigenen Topf (R18/R19)', async () => {
@@ -232,5 +240,39 @@ describe.skipIf(AUS)('Verwaltung gegen die echte Datenbank', () => {
 				throw new Error('ROLLBACK_ABSICHT');
 			})
 		).rejects.toThrow('ROLLBACK_ABSICHT');
+	});
+});
+
+// Sammelfassung 3.9: beim Loeschen endeten nur Zuordnungen OHNE Ende; eine, die erst im
+// Dezember enden sollte, zaehlte im Topffilter nach dem Loeschmonat weiter.
+describe.skipIf(AUS)('Topf loeschen gegen die Test-Datenbank', () => {
+	it('kuerzt auch Zuordnungen, die spaeter enden sollten', async () => {
+		await zurueckgerollt(async (tx) => {
+			const tdb = tx as unknown as typeof db;
+			const { haushaltId, k } = await testHaushalt(tx);
+			const kats = await tx.select({ id: categories.id }).from(categories).orderBy(categories.id).limit(3);
+			expect(kats).toHaveLength(3);
+			const [topf] = await tx.insert(budgets).values({ householdId: haushaltId, name: 'Prueftopf' }).returning({ id: budgets.id });
+			const zuordnung = (categoryId: string, giltBis: string | null) => ({
+				budgetId: topf.id, householdId: haushaltId, categoryId, giltAb: '2026-01-01', giltBis
+			});
+			await tx.insert(budgetKategorien).values([zuordnung(kats[0].id, null), zuordnung(kats[1].id, '2026-12-31'), zuordnung(kats[2].id, '2026-08-31')]);
+
+			await budgetLoeschen(tdb, k, topf.id, '2026-10');
+
+			const bis = new Map(
+				(
+					await tx
+						.select({ categoryId: budgetKategorien.categoryId, giltBis: budgetKategorien.giltBis })
+						.from(budgetKategorien)
+						.where(eq(budgetKategorien.budgetId, topf.id))
+				).map((z) => [z.categoryId, z.giltBis])
+			);
+			expect(bis.get(kats[0].id)).toBe('2026-09-30');
+			expect(bis.get(kats[1].id)).toBe('2026-09-30');
+			expect(bis.get(kats[2].id)).toBe('2026-08-31'); // schon vorher beendet: bleibt
+			const [t] = await tx.select({ geloeschtAb: budgets.geloeschtAb }).from(budgets).where(eq(budgets.id, topf.id));
+			expect(t.geloeschtAb).toBe('2026-10-01');
+		});
 	});
 });

@@ -12,6 +12,8 @@ import { checkPlausibility } from '$lib/server/validation/plausibility';
 import type { ExtractionProvider, ExtractionUsage } from '$lib/server/extraction';
 import type { ExtractedReceipt } from '$lib/server/extraction/schema';
 import { KiKonfigurationFehler } from '$lib/server/ki/fehler';
+import { istVoruebergehenderDbFehler } from '$lib/server/db/fehler';
+import { auftragsFrist, type AuftragsFrist } from '$lib/server/queue/fristen';
 import { preiseAusEnv, type Preise } from '$lib/server/ki/preise';
 export { preiseAusEnv, type Preise };
 import type { OcrLaufDaten, OcrZeileKurz } from '$lib/server/ocr/anbieter';
@@ -52,6 +54,9 @@ import { DOPPEL_GRUND, originalFuerNeuenBon } from '$lib/server/bons/doppelt';
  *                          abgebrochener Job (pg-boss, Worker-Shutdown) wirft
  *                          'AbortError'. Beides ist "später nochmal", keine Aussage
  *                          über den Bon selbst.
+ *  - Datenbank-Aussetzer → vorübergehend: SQLSTATE 08…, 57P01–03, 53300, 40001, 40P01;
+ *                          ECONNREFUSED/ECONNRESET/ETIMEDOUT/EPIPE/EAI_AGAIN; „Connection
+ *                          terminated“ (db/fehler.ts)
  *  - alles andere       → dauerhaft (Schema-Fehler, `BonUnlesbarError`,
  *                          `OcrWerkzeugKaputtError`, jeder sonstige Programmfehler)
  *
@@ -62,6 +67,11 @@ import { DOPPEL_GRUND, originalFuerNeuenBon } from '$lib/server/bons/doppelt';
  * konstruiert) versehentlich umklassifiziert.
  */
 export function istVoruebergehenderFehler(err: unknown): boolean {
+  // 4.8 (Sammelfassung 0.11.0): ein Aussetzer der DATENBANK (Verbindung weg, Neustart, zu viele
+  // Verbindungen, Deadlock) heisst wie ein beschaeftigter Mac „spaeter nochmal" — im ganzen
+  // Auftrag, vom Laden des Bildes bis zum Speichern. drizzle verpackt den pg-Fehler; db/fehler.ts
+  // packt ihn aus.
+  if (istVoruebergehenderDbFehler(err)) return true;
   // Fehler der KI-KONFIGURATION (Bildweg nicht freigegeben, Schluessel nicht lesbar):
   // der Bon ist nicht schuld. Repariert der Betreiber die Einstellung, laeuft er beim
   // naechsten Versuch durch.
@@ -118,6 +128,9 @@ export type SaveArgs = {
   ocr: OcrLaufDaten | null;
   /** Die OCR-Zeilen des Laufs — siehe ExtractionResult.ocrZeilen. null ohne Boxen. */
   ocrZeilen: OcrZeileKurz[] | null;
+  /** 4.5: Frist und Signal des Auftrags — fuer die Kategorien. */
+  frist?: AuftragsFrist;
+  signal?: AbortSignal;
 };
 
 /**
@@ -182,6 +195,11 @@ export async function handleExtractJobs(
   for (const job of jobs) {
     const { receiptId } = job.data;
     const startedAt = Date.now();
+    // 4.5 (Sammelfassung 0.11.0): EINE Frist je Auftrag. Jedes Modell — Mac, Reserve, Bildweg,
+    // Kategorien — bekommt ein Signal, das an ihr oder mit dem Auftrag endet; Reserve und Nachfrage
+    // fragen vor dem Beginnen nach der Restzeit (opts.frist / SaveArgs.frist).
+    const frist = auftragsFrist(startedAt);
+    const signal = frist.signal(frist.restMs(), job.signal);
     deps.auftragBeginnt?.();
     try {
       const image = await deps.loadImage(receiptId);
@@ -192,8 +210,8 @@ export async function handleExtractJobs(
       const ohneVorpruefung = job.data.ohneVorpruefung === true;
       const { receipt: result, usage, raw, servedModel, warnings, ocrText, ocr, ocrZeilen } = await deps.provider.extract(
         image,
-        job.signal,
-        { ohneVorpruefung }
+        signal,
+        { ohneVorpruefung, frist }
       );
       // Aufgabenstellung Punkt 3: `warnings` (Entwurf E7, Aufgabe 2) war bisher nur
       // Transportweg — niemand sah sie. `needsReviewReason` ist der bestehende,
@@ -219,7 +237,9 @@ export async function handleExtractJobs(
         servedModel,
         ocrText,
         ocr,
-        ocrZeilen
+        ocrZeilen,
+        frist,
+        signal
       });
     } catch (err) {
       if (err instanceof BonNichtMehrOffen) {
@@ -537,7 +557,7 @@ export function productionDeps(
     provider,
 
     async saveResult({
-      receiptId, result, problems, provider: pid, model, durationMs, usage, raw, servedModel, ocrText, ocr, ocrZeilen
+      receiptId, result, problems, provider: pid, model, durationMs, usage, raw, servedModel, ocrText, ocr, ocrZeilen, frist, signal
     }) {
       const purchasedAt = parseBonZeit(result.purchasedAt);
       // Doppel-Erkennung (bons/doppelt.ts) VOR der Transaktion, nicht darin: scheitert die
@@ -666,7 +686,11 @@ export function productionDeps(
       //
       // bonEinsortieren wirft nie: eine Kategorie ist wuenschenswert, ein Bon ist
       // unverzichtbar. Was schiefging, wird protokolliert, nicht geworfen.
-      const eingeordnet = await bonEinsortieren(receiptId, echteModellDeps({ ziel: provider.kategorienZiel ?? null }));
+      // 4.5: die Kategorien bekommen nur, was vom Auftrag bleibt, und hoeren mit ihm auf.
+      const eingeordnet = await bonEinsortieren(
+        receiptId,
+        echteModellDeps({ ziel: provider.kategorienZiel ?? null, auftrag: frist ? { frist, signal } : undefined })
+      );
       if (eingeordnet.fehler) {
         console.error(`[worker] Kategorien für Bon ${receiptId}: ${eingeordnet.fehler}`);
       }

@@ -1,3 +1,5 @@
+import type { KeinBonCode } from './beanstandungen';
+
 /**
  * Reine Helfer fuer die Bon-Liste: Klartexte, Datumsformat, Tagesgruppen, Filterlinks.
  * Keine Svelte-Abhaengigkeit — die Komponenten lesen hier nur ab.
@@ -103,4 +105,24 @@ export function vonReserveGelesen(
 	lauf: { kiRolle: string | null; error: string | null } | undefined
 ): boolean {
 	return (status === 'review' || status === 'confirmed') && lauf?.error === null && lauf.kiRolle === 'reserve';
+}
+
+/** Wartet der Bon aufs Lesen? Dann ist in der Pruefansicht nichts zu tun (Sammelfassung 2.6). */
+export function wartetAufLesen(status: string): boolean {
+	return status === 'pending' || status === 'extracting';
+}
+
+/**
+ * Der Lese-Knopf eines fehlgeschlagenen Bons (2.12). Mit Kein-Bon-Hinweis nie „Erneut lesen" —
+ * die Vorpruefung schluege wieder an —, sondern „Doch ein Bon, lesen"; bei kaum Text auch das
+ * nicht, das Modell erfaende einen Bon (Pruefung 27.09.2026).
+ */
+export function leseKnopf(status: string, keinBon: KeinBonCode | null): 'erneut' | 'dochEinBon' | null {
+	if (status !== 'failed') return null;
+	if (keinBon === null) return 'erneut';
+	return keinBon === 'kein_bon_leer' ? null : 'dochEinBon';
+}
+
+export function anzahlBons(n: number): string {
+	return n === 1 ? '1 Bon' : `${n} Bons`;
 }

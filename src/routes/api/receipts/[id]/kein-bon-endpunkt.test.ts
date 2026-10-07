@@ -46,4 +46,19 @@ describe('POST /api/receipts/[id]/kein-bon', () => {
 		mocks.ergebnis = { ok: false, status: 409, meldung: 'Dazu ist schon entschieden worden.' };
 		expect(isHttpError(await fang(POST(ereignis())), 409)).toBe(true);
 	});
+
+	// 2.13: ein Bon, den es fuer diesen Menschen nicht gibt, ist 404 — nicht 409, nicht 500.
+	it('meldet einen unbekannten Bon als 404', async () => {
+		mocks.ergebnis = { ok: false, status: 404, meldung: 'Bon nicht gefunden' };
+		const e = await fang(POST(ereignis()));
+		expect(isHttpError(e, 404)).toBe(true);
+		expect((e as { body: { message: string } }).body.message).toBe('Bon nicht gefunden');
+	});
+
+	// 2.11: vorher hiess jeder Erfolg { ok: true }, auch wenn das Einreihen scheiterte.
+	it('reicht eingereiht durch', async () => {
+		mocks.ergebnis = { ok: true, eingereiht: false };
+		const antwort = (await POST(ereignis())) as Response;
+		expect(await antwort.json()).toEqual({ ok: true, eingereiht: false });
+	});
 });

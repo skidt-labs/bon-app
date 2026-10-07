@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { notifyMatrix } from './notify';
+import { notifyMatrix, MATRIX_ZEITLIMIT_MS } from './notify';
 
 /**
  * K2 (Korrekturrunde 2): `notify.ts` war im gesamten Diff der Matrix-Anbindung nie
@@ -70,5 +70,25 @@ describe('notifyMatrix (K2)', () => {
 		await notifyMatrix('Testalarm');
 
 		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	// 4.5 (Sammelfassung 0.11.0): Meldungen laufen mitten in Auftraegen. Eine haengende Verbindung
+	// zu Synapse hatte keine Grenze und schob den Auftrag ueber seinen Verfall.
+	it('wartet hoechstens 10 s auf Matrix und kehrt danach ohne Wurf zurueck', async () => {
+		const zeit = vi
+			.spyOn(AbortSignal, 'timeout')
+			.mockImplementation(() => AbortSignal.abort(new DOMException('Zeit um', 'TimeoutError')));
+		const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+			if (init?.signal?.aborted) throw init.signal.reason;
+			return new Response('{}', { status: 200 });
+		});
+		vi.stubGlobal('fetch', fetchMock);
+		const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+		await expect(notifyMatrix('Testalarm')).resolves.toBeUndefined();
+
+		expect(MATRIX_ZEITLIMIT_MS).toBe(10_000);
+		expect(zeit).toHaveBeenCalledWith(MATRIX_ZEITLIMIT_MS);
+		expect(consoleErr).toHaveBeenCalled();
 	});
 });

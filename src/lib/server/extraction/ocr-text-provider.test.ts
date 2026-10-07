@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import { auftragsFrist } from '../queue/fristen';
 import {
   createOcrTextProvider,
   BonUnlesbarError,
@@ -658,6 +659,29 @@ describe('createOcrTextProvider — uebergebener Modellaufruf', () => {
     await expect(provider.extract(Buffer.from('bild'))).rejects.toBeInstanceOf(BonUnlesbarError);
     expect(modellAufruf).not.toHaveBeenCalled();
   });
+
+it('4.5: reicht die Auftragsfrist als vierten Wert an den Aufruf', async () => {
+  const antwort = {
+    receipt: { ...basisAntwort([]), items: [] } as never,
+    usage: null,
+    raw: {},
+    servedModel: null,
+    warnings: []
+  };
+  const modellAufruf = vi.fn(async (..._a: unknown[]) => antwort);
+  const frist = auftragsFrist(Date.now());
+  const provider = createOcrTextProvider({
+    baseUrl: 'https://example.test/v1',
+    apiKey: 'k',
+    model: 'm',
+    execFileImpl: execFileImplMitText(LESBARER_TEXT),
+    modellAufruf
+  });
+
+  await provider.extract(Buffer.from('bild'), undefined, { frist });
+
+  expect(modellAufruf.mock.calls[0][3]).toBe(frist);
+});
 });
 
 describe('frageTextModell', () => {

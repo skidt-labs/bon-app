@@ -1,20 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { jahresAuswahl } from '$lib/berichte/zeitleiste';
+import { alsFilter } from '$lib/server/berichte/gespeichert';
 
-const mocks = vi.hoisted(() => ({ bericht: vi.fn(), bons: vi.fn() }));
+const mocks = vi.hoisted(() => ({ bericht: vi.fn(), bons: vi.fn(), summen: vi.fn() }));
 vi.mock('$lib/server/db', () => ({ db: {} }));
 vi.mock('$lib/server/zeit', () => ({ heutigerTag: () => '2026-09-25' }));
-vi.mock('$lib/server/berichte/abfragen', () => ({ berichtLaden: mocks.bericht }));
+vi.mock('$lib/server/berichte/abfragen', () => ({ berichtLaden: mocks.bericht, monatsSummenLaden: mocks.summen }));
 vi.mock('$lib/server/berichte/bons', () => ({ bonsZuFilter: mocks.bons }));
 const matrix = vi.hoisted(() => ({
 	chat: vi.fn(async (_userId: string): Promise<{ matrixUserId: string; raum: string | null } | null> => null),
-	enqueue: vi.fn(async (_job: { userId: string; text: string }) => {})
+	enqueue: vi.fn(async (_job: { userId: string; text: string }): Promise<boolean> => true)
 }));
 vi.mock('$lib/server/matrix/links', () => ({ direktchatFuer: matrix.chat }));
 vi.mock('$lib/server/queue/boss', () => ({ enqueueMatrixBericht: matrix.enqueue }));
 vi.mock('$lib/server/betrieb/verwaltung', () => ({ haushaltsName: vi.fn(async () => 'Familie Beispiel') }));
 vi.mock('$env/dynamic/private', () => ({ env: { ORIGIN: 'https://bon.example.org' } }));
 const gespeichert = vi.hoisted(() => ({
-	laden: vi.fn(), liste: vi.fn(async () => []), speichern: vi.fn(), aendern: vi.fn(), umbenennen: vi.fn(), loeschen: vi.fn()
+	laden: vi.fn(), liste: vi.fn(async () => []), speichern: vi.fn(), aendern: vi.fn(), umbenennen: vi.fn(), loeschen: vi.fn(), wirksam: vi.fn()
 }));
 vi.mock('$lib/server/berichte/optionen', () => ({ istWahlmerkmal: (m: string) => ['laden', 'kategorie', 'person', 'topf'].includes(m), filterOptionen: vi.fn(async () => [{ wert: 'x' }]) }));
 vi.mock('$lib/server/berichte/gespeichert', async () => {
@@ -22,6 +24,7 @@ vi.mock('$lib/server/berichte/gespeichert', async () => {
 	return {
 		alsFilter: echt.alsFilter,
 		istGeaendert: echt.istGeaendert,
+		gespeichertWirksam: gespeichert.wirksam,
 		gespeichertLaden: gespeichert.laden,
 		gespeicherteListe: gespeichert.liste,
 		berichtSpeichern: gespeichert.speichern,
@@ -43,8 +46,12 @@ beforeEach(() => {
 	matrix.chat.mockReset().mockResolvedValue(null);
 	matrix.enqueue.mockReset();
 	gespeichert.laden.mockReset().mockResolvedValue(null);
+	gespeichert.wirksam
+		.mockReset()
+		.mockImplementation(async (_db: unknown, _k: unknown, b: Parameters<typeof alsFilter>[0], heute: string) => alsFilter(b, heute).filter);
 	mocks.bericht.mockReset().mockImplementation(async (_db, _k, filter) => ({ filter, hinweise: ['aus der Abfrage'] }));
 	mocks.bons.mockReset().mockImplementation(async (_db, _k, filter) => ({ filter, hinweise: [], titel: 'Obst', bons: [] }));
+	mocks.summen.mockReset().mockResolvedValue({});
 });
 
 describe('/reports', () => {
@@ -82,6 +89,24 @@ describe('/reports/bons', () => {
 		const quatsch = (await bonsSeite(angemeldet('kategorie=obst&ansicht=quatsch'))) as { ansicht: string; hinweise: string[] };
 		expect(quatsch.ansicht).toBe('bon');
 		expect(quatsch.hinweise).toEqual([expect.stringContaining('quatsch')]);
+	});
+
+	// 3.1: ein leeres ?ansicht= ist „nicht angegeben" — kein Hinweis mit leeren Anfuehrungszeichen.
+	it('behandelt ein leeres ansicht= wie nicht angegeben', async () => {
+		for (const q of ['kategorie=obst&ansicht=', 'kategorie=obst&ansicht=%20']) {
+			const daten = (await bonsSeite(angemeldet(q))) as { ansicht: string; hinweise: string[] };
+			expect(daten.ansicht).toBe('bon');
+			expect(daten.hinweise).toEqual([]);
+		}
+	});
+
+	// Sammelfassung 3.3: die Kacheln zeigten „—", und die Jahresliste kannte nur das laufende Jahr.
+	it('laedt die Monatssummen fuer die Zeitwahl wie der Bericht', async () => {
+		mocks.summen.mockResolvedValue({ '2024-05': 1200, '2026-08': 4711 });
+		const daten = (await bonsSeite(angemeldet('kategorie=obst&umfang=meine'))) as { monatsSummen: Record<string, number> };
+		expect(mocks.summen).toHaveBeenCalledWith({}, expect.anything(), expect.objectContaining({ umfang: 'meine' }));
+		expect(daten.monatsSummen).toEqual({ '2024-05': 1200, '2026-08': 4711 });
+		expect(jahresAuswahl('2026-09-25', daten.monatsSummen)).toEqual([2026, 2025, 2024]);
 	});
 });
 
@@ -134,6 +159,41 @@ describe('/reports: gespeicherte Berichte und Filterauswahl', () => {
 		expect(await actions.speichern(formular({ name: 'Kaffee', adresse: 'zeitraum=monat&monat=2026-09' }))).toMatchObject({
 			status: 400, data: { grund: 'Einen Bericht mit diesem Namen gibt es im Haushalt schon.' }
 		});
+	});
+
+	const LADEN_WEG = '3f2a0b7c-aaaa-bbbb-cccc-000000000001';
+	const LADEN_DA = '3f2a0b7c-aaaa-bbbb-cccc-000000000002';
+	const mitZweiLaeden = {
+		id: GESPEICHERT_ID, name: 'Läden', parameter: { laden: `${LADEN_WEG},${LADEN_DA}` }, zeitraum: null, erstellerName: 'Erika', darfAendern: true
+	};
+
+	// Sammelfassung 3.6
+	it('wertet einen inzwischen geloeschten Laden nicht als Aenderung, der Hinweis bleibt', async () => {
+		gespeichert.laden.mockResolvedValue(mitZweiLaeden);
+		mocks.bericht.mockImplementation(async (_db, _k, filter) => ({
+			filter: { ...filter, laden: filter.laden.filter((l: string) => l !== LADEN_WEG) },
+			hinweise: ['Einen der gewählten Läden gibt es nicht (mehr) — weggelassen.']
+		}));
+		const daten = (await berichtSeite(angemeldet(`bericht=${GESPEICHERT_ID}`))) as { aktiv: { geaendert: boolean }; hinweise: string[] };
+		expect(daten.aktiv.geaendert).toBe(false);
+		expect(daten.hinweise).toContain('Einen der gewählten Läden gibt es nicht (mehr) — weggelassen.');
+		expect(gespeichert.wirksam).not.toHaveBeenCalled();
+	});
+
+	it('vergleicht auch mit eigener Adresse gegen den bereinigten gespeicherten Bericht', async () => {
+		gespeichert.laden.mockResolvedValue(mitZweiLaeden);
+		gespeichert.wirksam.mockImplementation(async (_db: unknown, _k: unknown, b: Parameters<typeof alsFilter>[0], heute: string) => ({
+			...alsFilter(b, heute).filter,
+			laden: [LADEN_DA]
+		}));
+		// Nur der Monat ist anders — der gespeicherte Bericht hat keinen Zeitraum, das zaehlt nicht.
+		const blaettern = (await berichtSeite(angemeldet(`zeitraum=monat&monat=2026-08&laden=${LADEN_DA}&bericht=${GESPEICHERT_ID}`))) as {
+			aktiv: { geaendert: boolean };
+		};
+		expect(blaettern.aktiv.geaendert).toBe(false);
+		expect(gespeichert.wirksam).toHaveBeenCalledWith({}, expect.anything(), mitZweiLaeden, '2026-09-25');
+		const mitSuche = (await berichtSeite(angemeldet(`laden=${LADEN_DA}&suche=Tee&bericht=${GESPEICHERT_ID}`))) as { aktiv: { geaendert: boolean } };
+		expect(mitSuche.aktiv.geaendert).toBe(true);
 	});
 });
 
@@ -191,6 +251,36 @@ describe('/reports: Zusammenfassung per Matrix', () => {
 		});
 		expect(matrix.enqueue).toHaveBeenCalledWith({ userId: 'u1', text: expect.stringContaining('Ausgaben: 12,34 € in 2 Bons') });
 		expect(matrix.enqueue.mock.calls[0][0].text).toContain('https://bon.example.org/reports?zeitraum=jahr&jahr=2025&suche=Kaffee');
+	});
+
+	// Sammelfassung 3.10: was auch gekuerzt nicht in eine Nachricht passt, geht nicht still verloren.
+	it('legt keinen Auftrag an, der fuer den Bot zu lang waere', async () => {
+		matrix.chat.mockResolvedValue({ matrixUserId: '@erika:example.org', raum: '!dm:example.org' });
+		const laeden = ['3f2a0b7c-aaaa-bbbb-cccc-000000000001', '3f2a0b7c-aaaa-bbbb-cccc-000000000002', '3f2a0b7c-aaaa-bbbb-cccc-000000000003'];
+		mocks.bericht.mockImplementation(async (_db, _k, filter) => ({
+			filter,
+			namen: { laden: Object.fromEntries(laeden.map((l) => [l, 'Sehr langer Ladenname '.repeat(70)])), kategorie: {}, person: {}, topf: {} },
+			hinweise: [], kennzahlen: { summe: 1234, bons: 2 }, vergleiche: [], kategorien: []
+		}));
+		expect(await actions.matrix(formular({ adresse: `zeitraum=monat&monat=2026-09&laden=${laeden.join(',')}` }))).toMatchObject({
+			status: 400,
+			data: { grund: expect.stringContaining('zu lang') }
+		});
+		expect(matrix.enqueue).not.toHaveBeenCalled();
+	});
+
+	// Sammelfassung 3.11
+	it('sagt es, wenn der Auftrag nicht angenommen wurde', async () => {
+		matrix.chat.mockResolvedValue({ matrixUserId: '@erika:example.org', raum: '!dm:example.org' });
+		mocks.bericht.mockImplementation(async (_db, _k, filter) => ({
+			filter, namen: { laden: {}, kategorie: {}, person: {}, topf: {} }, hinweise: [],
+			kennzahlen: { summe: 1234, bons: 2 }, vergleiche: [], kategorien: []
+		}));
+		matrix.enqueue.mockResolvedValueOnce(false);
+		expect(await actions.matrix(formular({ adresse: 'zeitraum=monat&monat=2026-09' }))).toMatchObject({
+			status: 429,
+			data: { grund: 'Ein Bericht ist gerade unterwegs — bitte einen Moment warten.' }
+		});
 	});
 });
 

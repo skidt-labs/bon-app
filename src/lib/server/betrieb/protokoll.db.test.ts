@@ -5,8 +5,8 @@ import { betriebsprotokoll } from '$lib/server/db/schema';
 import { protokolliere } from './protokoll';
 
 /**
- * Gegen die LAUFENDE Datenbank, in einer Transaktion, die am Ende zurueckgerollt wird:
- *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon" RUN_DB_TESTS=1 \
+ * Gegen die Test-Datenbank, in einer Transaktion, die am Ende zurueckgerollt wird:
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
  *     npx vitest run src/lib/server/betrieb/protokoll.db.test.ts
  */
 const AUS = process.env.RUN_DB_TESTS !== '1';

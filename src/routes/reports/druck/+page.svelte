@@ -4,7 +4,7 @@
 	import { formatCents } from '$lib/money';
 	import { hatFilter, wirktAufPositionen } from '$lib/berichte/filter';
 	import { filterZusammenfassung } from '$lib/berichte/merkmale';
-	import { adresse, vergleichText, zeitraumName } from '$lib/berichte/zeitleiste';
+	import { adresse, leerText, vergleichText, zeitraumName } from '$lib/berichte/zeitleiste';
 	import { monatsName, tagName } from '$lib/berichte/kalender';
 
 	let { data } = $props();
@@ -42,7 +42,7 @@
 	{/each}
 
 	{#if k.bons === 0}
-		<p class="mt-6 font-bold">Für {name} gibt es keinen passenden bestätigten Bon.</p>
+		<p class="mt-6 font-bold">{leerText(data.filter).text}</p>
 	{:else}
 		<section class="mt-4 break-inside-avoid">
 			<h2 class="text-[13pt] font-bold">Kennzahlen</h2>
@@ -53,7 +53,7 @@
 					{#if k.positionen !== null}<tr><td class={ZELLE}>Passende Positionen</td><td class={BETRAG}>{k.positionen}</td></tr>{/if}
 					<tr><td class={ZELLE}>Je Bon</td><td class={BETRAG}>{formatCents(k.schnitt)} €</td></tr>
 					{#each data.vergleiche as v (v.bezeichnung)}
-						<tr><td class={ZELLE} colspan="2">{vergleichText(v)}</td></tr>
+						<tr><td class={ZELLE} colspan="2">{vergleichText(v, data.filter)}</td></tr>
 					{/each}
 				</tbody>
 			</table>

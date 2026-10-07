@@ -135,11 +135,21 @@ describe('istSystemfehler', () => {
     expect(istSystemfehler(new Error('Input buffer contains unsupported image format'))).toBe(false);
   });
 
-  // Im Zweifel 422 (Foto weg, aber wenigstens kein haengenbleibender 5xx), nicht 5xx
-  // (koennte einen Client dauerhaft denselben unlesbaren Upload wiederholen lassen).
-  it('behandelt einen unbekannten Fehlercode NICHT als Systemfehler', async () => {
+  // Sammelfassung N2: EINE Pruefung fuer Hochladen, Bild bearbeiten und Matrix. Ein Errno-Code
+  // kommt beim Ablegen nur von mkdir/writeFile, nie von sharp — ein hier nicht bedachter Code
+  // ist also ein Systemfehler: 503, die Outbox behaelt das Foto (vorher 422, Foto weg).
+  it('behandelt auch einen nicht eigens bedachten Errno-Code als Systemfehler', async () => {
     const { istSystemfehler } = await import('./images');
-    expect(istSystemfehler(Object.assign(new Error('x'), { code: 'ECONNRESET' }))).toBe(false);
+    for (const code of ['ESTALE', 'EBUSY', 'ECONNRESET', 'ENAMETOOLONG']) {
+      expect(istSystemfehler(Object.assign(new Error('x'), { code }))).toBe(true);
+    }
+  });
+
+  it('haelt Node-eigene Programmierfehler und Unfug nicht fuer Systemfehler', async () => {
+    const { istSystemfehler } = await import('./images');
+    for (const code of ['ERR_INVALID_ARG_TYPE', 'enospc', 'E', 'E1', 23]) {
+      expect(istSystemfehler(Object.assign(new Error('x'), { code }))).toBe(false);
+    }
   });
 
   it('kommt mit Nicht-Objekt-Fehlern klar', async () => {

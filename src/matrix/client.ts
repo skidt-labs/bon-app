@@ -24,7 +24,8 @@ import { notifyMatrix } from '$lib/server/notify';
 import { schwaerzeFehler } from './schwaerzen';
 import { direktchatFuer, direktchatMerken, direktchatVergessen } from '$lib/server/matrix/links';
 import { getBoss, QUEUE_MATRIX_BERICHT, type MatrixBerichtJob } from '$lib/server/queue/boss';
-import { berichtZustellen } from './bericht';
+import { berichtZustellen, raumMitglieder } from './bericht';
+import { berichtsdienstStarten, stoppFrist } from './berichtsdienst';
 
 const CODE_MUSTER = /^[A-Z2-9]{8}$/i;
 
@@ -312,23 +313,31 @@ export async function starteMatrixBot(): Promise<void> {
 	// Berichte Stufe 3: angeforderte Zusammenfassungen zustellen. Ein Fehler beim Senden
 	// selbst (Synapse weg) wirft und wird von pg-boss wiederholt; alles, was an der
 	// Zustellbarkeit scheitert, wird gemeldet und nicht wiederholt.
-	const boss = await getBoss();
-	await boss.work<MatrixBerichtJob>(QUEUE_MATRIX_BERICHT, { batchSize: 1, pollingIntervalSeconds: 5 }, async (jobs) => {
-		for (const job of jobs) {
-			const ergebnis = await berichtZustellen(job.data, {
-				direktchatFuer: (id) => direktchatFuer(id),
-				mitglieder: (raum) => client.getJoinedRoomMembers(raum),
-				botId: () => client.getUserId(),
-				senden: async (raum, text) => {
-					await client.sendText(raum, text);
-				},
-				vergessen: (matrixUserId, raum) => direktchatVergessen(matrixUserId, raum)
+	// Sammelfassung 4.7: NICHT abgewartet — startet pg-boss nicht, nimmt der Bot weiter Fotos an,
+	// und berichtsdienst.ts versucht es mit wachsendem Abstand erneut (und meldet es).
+	const berichte = berichtsdienstStarten({
+		starten: async () => {
+			const boss = await getBoss();
+			await boss.work<MatrixBerichtJob>(QUEUE_MATRIX_BERICHT, { batchSize: 1, pollingIntervalSeconds: 5 }, async (jobs) => {
+				for (const job of jobs) {
+					const ergebnis = await berichtZustellen(job.data, {
+						direktchatFuer: (id) => direktchatFuer(id),
+						mitglieder: (raum) => raumMitglieder(client, raum),
+						botId: () => client.getUserId(),
+						senden: async (raum, text) => {
+							await client.sendText(raum, text);
+						},
+						vergessen: (matrixUserId, raum) => direktchatVergessen(matrixUserId, raum)
+					});
+					if (ergebnis !== 'gesendet') {
+						console.warn('[matrix] Bericht nicht zugestellt', ergebnis, job.id);
+						await notifyMatrix(`Bon-Bot: Bericht nicht zugestellt (${ergebnis})`).catch(() => {});
+					}
+				}
 			});
-			if (ergebnis !== 'gesendet') {
-				console.warn('[matrix] Bericht nicht zugestellt', ergebnis, job.id);
-				await notifyMatrix(`Bon-Bot: Bericht nicht zugestellt (${ergebnis})`).catch(() => {});
-			}
-		}
+			return boss;
+		},
+		melden: (text) => notifyMatrix(text)
 	});
 
 	// K1 (Korrekturrunde 2): HIER stand vorher ein 30-Sekunden-Zeitgeber, der
@@ -342,7 +351,7 @@ export async function starteMatrixBot(): Promise<void> {
 		process.on(signal, () => {
 			console.log(`[matrix] ${signal} empfangen, beende`);
 			client.stop();
-			void beendeSauber(() => kette);
+			void beendeSauber(() => kette, (frist) => berichte.beenden(frist));
 		});
 	}
 }
@@ -364,13 +373,21 @@ export async function starteMatrixBot(): Promise<void> {
  * wartet genau darauf, dass diese Schreiboperation durchgelaufen ist, bevor der
  * Prozess beendet wird.
  */
-async function beendeSauber(holeKette: () => Promise<void>): Promise<void> {
+async function beendeSauber(
+	holeKette: () => Promise<void>,
+	berichteBeenden: (fristMs: number) => Promise<void>
+): Promise<void> {
+	const start = Date.now();
 	const fertig = await warteAufKette(holeKette, SHUTDOWN_KETTE_TIMEOUT_MS);
 	if (!fertig) {
 		console.error(
 			`[matrix] Verarbeitungskette nach ${SHUTDOWN_KETTE_TIMEOUT_MS / 1000}s nicht fertig — Warten für den Shutdown abgebrochen`
 		);
 	}
+	// Sammelfassung 4.7: pg-boss erst NACH der Kette stoppen — ein Foto, das gerade eingereiht
+	// wird, braucht ihn noch. Ohne stop() bliebe ein laufender Bericht „aktiv" und wuerde nach
+	// dem Neustart ein zweites Mal zugestellt.
+	await berichteBeenden(stoppFrist(Date.now() - start));
 	process.exit(0);
 }
 

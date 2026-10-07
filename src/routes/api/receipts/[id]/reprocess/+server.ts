@@ -1,4 +1,5 @@
 import { json, error } from '@sveltejs/kit';
+import { statusSperrText } from '$lib/bons/sperrtext';
 import { db } from '$lib/server/db';
 import { bonLaden, bonReaktivieren, bonAlsFehlgeschlagenMarkieren } from '$lib/server/bons/liste';
 import { enqueueExtraction } from '$lib/server/queue/boss';
@@ -46,16 +47,13 @@ export const POST: RequestHandler = async ({ params, locals }) => {
 		if (receipt.status === 'confirmed') {
 			error(409, 'Dieser Bon ist bereits bestätigt und wird nicht erneut ausgelesen.');
 		}
-		if (receipt.status === 'pending' || receipt.status === 'extracting') {
-			error(409, 'Dieser Bon wird bereits verarbeitet.');
-		}
 		if (receipt.status === 'review') {
 			error(409, 'Dieser Bon ist bereits ausgelesen und wartet auf Bestätigung.');
 		}
-		// Sollte praktisch nie erreicht werden (z. B. ein Bon, dessen Status sich
-		// zwischen dem UPDATE oben und diesem SELECT durch einen zweiten,
-		// gleichzeitigen Aufruf bereits geändert hat) — kein stummer Fehlschlag.
-		error(409, `Dieser Bon kann derzeit nicht erneut ausgelesen werden (Status: ${receipt.status}).`);
+		// Alles andere — wartet oder wird gelesen, Papierkorb, Doppel, oder ein Status, der sich
+		// zwischen dem UPDATE oben und diesem SELECT geaendert hat — sagt der gemeinsame
+		// Sperrtext. Vorher stand hier „(Status: verworfen)", ein Spaltenwert statt eines Satzes.
+		error(409, statusSperrText(receipt.status));
 	}
 
 	try {

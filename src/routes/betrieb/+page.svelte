@@ -47,7 +47,7 @@
 						<span class="min-w-0">
 							<span class="block truncate text-[13px] font-bold">{h.name}</span>
 							<span class="block text-[11.5px] font-semibold text-leise">
-								{h.mitglieder} Mitglied(er) · {h.bons} Bons · seit {datum(h.angelegtAm)}
+								{h.mitglieder} Mitglied(er) · {h.bons} {h.bons === 1 ? 'Bon' : 'Bons'}{#if h.imPapierkorb > 0}, davon {h.imPapierkorb} im Papierkorb{/if} · seit {datum(h.angelegtAm)}
 							</span>
 						</span>
 						{#if h.mitglieder === 0 && h.bons === 0}

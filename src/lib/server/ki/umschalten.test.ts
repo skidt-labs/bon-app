@@ -1,4 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
+import type { AuftragsFrist } from '$lib/server/queue/fristen';
 import {
 	ReserveGestoert,
 	istNichtErreichbar,
@@ -229,6 +230,64 @@ describe('modellAufrufMitReserve', () => {
 		const signal = new AbortController().signal;
 		await a.aufruf('TEXT', Q, signal);
 		expect(a.frage.mock.calls[0][3]).toBe(signal);
+	});
+});
+
+// 4.5 (Sammelfassung 0.11.0): Die Reserve bekommt nur, was vom Auftrag bleibt. Unter 60 s wird sie
+// gar nicht erst gefragt — umgeschaltet ist trotzdem, und der Neuversuch liest gleich dort.
+describe('modellAufrufMitReserve — Restzeit des Auftrags (4.5)', () => {
+	const mitRest = (restMs: number): AuftragsFrist => ({ restMs: () => restMs, signal: () => new AbortController().signal });
+	const fehlerVon = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+
+	it('Mac weg, weniger als 60 s Rest: umschalten ja, Reserve nein — voruebergehender Fehler', async () => {
+		const a = aufbau({ haupt: async () => Promise.reject(zeitueber()) });
+		const err = await fehlerVon(a.aufruf('TEXT', Q, undefined, mitRest(59_999)));
+		expect(err).toBeInstanceOf(DOMException);
+		expect((err as DOMException).name).toBe('TimeoutError');
+		expect((err as DOMException).message).toContain('nächsten Versuch');
+		expect(a.deps.umschalten).toHaveBeenCalledWith('Zeitüberschreitung');
+		expect(a.gefragt).toEqual(['haupt:TEXT']);
+	});
+
+	it('mit genau 60 s Rest liest die Reserve wie bisher', async () => {
+		const a = aufbau({ haupt: async () => Promise.reject(zeitueber()) });
+		const r = await a.aufruf('TEXT', Q, undefined, mitRest(60_000));
+		expect(r.receipt.merchantName).toBe('reserve');
+	});
+
+	it('Reserve schon aktiv, zu wenig Rest: weder Reserve noch Mac', async () => {
+		const a = aufbau({ aktivSeit: new Date() });
+		const err = await fehlerVon(a.aufruf('TEXT', Q, undefined, mitRest(10_000)));
+		expect((err as DOMException).name).toBe('TimeoutError');
+		expect(a.gefragt).toEqual([]);
+		expect(a.gemerkt).toEqual([]);
+	});
+
+	// Das Signal der Reserve endet an der Frist mit TimeoutError — fuer istNichtErreichbar sieht das
+	// aus wie eine gestoerte Reserve. Der Worker-Alarm hiesse dann „Reserve nicht nutzbar
+	// (Zeitüberschreitung)", obwohl sie in Ordnung ist und der Neuversuch ueber sie liest.
+	it('endet die Frist, waehrend die Reserve liest: TimeoutError, nicht ReserveGestoert', async () => {
+		let rest = 60_000;
+		const frist: AuftragsFrist = { restMs: () => rest, signal: () => new AbortController().signal };
+		const a = aufbau({
+			haupt: async () => Promise.reject(zeitueber()),
+			reserve: async () => {
+				rest = 0; // die Frist ist um, das Signal bricht mit TimeoutError ab
+				throw zeitueber();
+			}
+		});
+		const err = await fehlerVon(a.aufruf('TEXT', Q, undefined, frist));
+		expect(err).not.toBeInstanceOf(ReserveGestoert);
+		expect((err as DOMException).name).toBe('TimeoutError');
+		expect((err as DOMException).message).toContain('nächsten Versuch');
+		expect(a.gefragt).toEqual(['haupt:TEXT', 'reserve:TEXT']);
+	});
+
+	it('greift das eigene Zeitlimit der Reserve-Karte mit genug Restzeit, bleibt es „Reserve gestört" (Gegenprobe)', async () => {
+		const a = aufbau({ haupt: async () => Promise.reject(zeitueber()), reserve: async () => Promise.reject(zeitueber()) });
+		const err = await fehlerVon(a.aufruf('TEXT', Q, undefined, mitRest(300_000)));
+		expect(err).toBeInstanceOf(ReserveGestoert);
+		expect((err as Error).message).toContain('nicht nutzbar (Zeitüberschreitung)');
 	});
 });
 

@@ -1,8 +1,9 @@
 /**
- * Integrationstest gegen die LAUFENDE Datenbank — deshalb hinter RUN_DB_TESTS=1.
+ * Integrationstest gegen die Test-Datenbank — deshalb hinter RUN_DB_TESTS=1.
  * Läuft nicht in der normalen Suite (die muss ohne Datenbank auskommen).
  *
- *   RUN_DB_TESTS=1 npx vitest run src/lib/server/matrix/pairing.db.test.ts
+ *   DATABASE_URL="postgres://bon:$(cat secrets/db-password)@127.0.0.1:55432/bon_test" RUN_DB_TESTS=1 \
+ *     npx vitest run src/lib/server/matrix/pairing.db.test.ts
  *
  * Bewacht zwei Eigenschaften, die der Mock in pairing.test.ts NICHT prüfen kann:
  *
