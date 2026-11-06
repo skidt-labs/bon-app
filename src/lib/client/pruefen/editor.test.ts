@@ -5,7 +5,8 @@ import {
 	zeileLoeschen,
 	neuNummerieren,
 	positionssumme,
-	pruefeVorBestaetigen,
+	vermutungen,
+	bezuegeLeeren,
 	handEingabeBegonnen,
 	kopieSchluessel,
 	selberBon,
@@ -109,25 +110,25 @@ describe('positionssumme', () => {
 	});
 });
 
-describe('pruefeVorBestaetigen', () => {
+describe('vermutungen', () => {
 	it('ist still, wenn alles passt', () => {
-		expect(pruefeVorBestaetigen([z({ lineNo: 1 })])).toEqual([]);
+		expect(vermutungen([z({ lineNo: 1 })])).toEqual([]);
 	});
 
-	// Der bestehende Fall no_price: eine Warenzeile ohne Betrag ist kein Bon, sondern
-	// eine Luecke. Bestaetigen bleibt gesperrt, bis sie zu ist.
+	// Der bestehende Fall no_price — seit 0.13.0 eine Vermutung, keine Sperre: es gibt
+	// Gratisartikel, und wer den Bon geprueft hat, hat das letzte Wort.
 	it('nennt Warenzeilen ohne Betrag mit ihrer Nummer', () => {
-		const hinweise = pruefeVorBestaetigen([z({ lineNo: 1, totalPriceCents: 0 }), z({ lineNo: 2 })]);
+		const hinweise = vermutungen([z({ lineNo: 1, totalPriceCents: 0 }), z({ lineNo: 2 })]);
 		expect(hinweise).toHaveLength(1);
 		expect(hinweise[0]).toContain('1');
 	});
 
 	it('laesst Infozeilen ohne Betrag durch', () => {
-		expect(pruefeVorBestaetigen([z({ lineNo: 1, lineType: 'info', totalPriceCents: 0 })])).toEqual([]);
+		expect(vermutungen([z({ lineNo: 1, lineType: 'info', totalPriceCents: 0 })])).toEqual([]);
 	});
 
 	it('nennt einen Bezug ins Leere', () => {
-		const hinweise = pruefeVorBestaetigen([
+		const hinweise = vermutungen([
 			z({ lineNo: 1, lineType: 'discount', totalPriceCents: -50, appliesToLine: 9 })
 		]);
 		expect(hinweise[0]).toContain('9');
@@ -137,13 +138,13 @@ describe('pruefeVorBestaetigen', () => {
 	// wenn der Mensch das entscheidet (Entwurf §2). Sie ist ein Hinweis in der Kopfzeile,
 	// kein Hindernis — deshalb taucht sie hier gar nicht auf.
 	it('sperrt nicht wegen einer Summendifferenz', () => {
-		expect(pruefeVorBestaetigen([z({ lineNo: 1, totalPriceCents: 1 })])).toEqual([]);
+		expect(vermutungen([z({ lineNo: 1, totalPriceCents: 1 })])).toEqual([]);
 	});
 
 	// Der Server lehnt einen Bezug auf sich selbst ab (korrekturen.ts). Faellt das erst
 	// dort auf, sieht der Mensch einen 400er statt eines Hinweises an der Zeile.
 	it('nennt einen Bezug auf sich selbst', () => {
-		const hinweise = pruefeVorBestaetigen([
+		const hinweise = vermutungen([
 			z({ lineNo: 1, lineType: 'discount', totalPriceCents: -50, appliesToLine: 1 })
 		]);
 		expect(hinweise).toHaveLength(1);
@@ -279,5 +280,24 @@ describe('selberBon', () => {
 	it('gilt nicht fuer einen anderen Bon, auch wenn dessen Id gleich beginnt', () => {
 		expect(selberBon(kopieSchluessel('b1', 'review'), kopieSchluessel('b2', 'review'))).toBe(false);
 		expect(selberBon(kopieSchluessel('b1', 'pending'), kopieSchluessel('b10', 'review'))).toBe(false);
+	});
+});
+
+describe('bezuegeLeeren', () => {
+	it('leert Bezuege auf sich selbst und ins Leere, laesst gueltige stehen', () => {
+		const r = bezuegeLeeren([
+			z({ lineNo: 1 }),
+			z({ lineNo: 2, lineType: 'discount', totalPriceCents: -50, appliesToLine: 1 }),
+			z({ lineNo: 3, lineType: 'discount', totalPriceCents: -50, appliesToLine: 3 }),
+			z({ lineNo: 4, lineType: 'discount', totalPriceCents: -50, appliesToLine: 9 })
+		]);
+		expect(r.zeilen.map((x) => x.appliesToLine)).toEqual([null, 1, null, null]);
+		expect(r.geleert).toEqual([3, 4]);
+	});
+	it('ohne ungueltige Bezuege: dieselben Zeilen, nichts geleert', () => {
+		const zeilen = [z({ lineNo: 1 })];
+		const r = bezuegeLeeren(zeilen);
+		expect(r.zeilen).toBe(zeilen);
+		expect(r.geleert).toEqual([]);
 	});
 });

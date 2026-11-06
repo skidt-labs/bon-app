@@ -3,7 +3,10 @@
 	import Symbol from '$lib/client/geruest/Symbol.svelte';
 	import Betragsfeld from './Betragsfeld.svelte';
 	import { ART_TEXT, MONETAER, ZEILENARTEN, type EditorZeile } from './editor';
-	import { rechenprobe } from './rechenprobe';
+	import { mengeAlsZahl, rechenprobe } from './rechenprobe';
+	import { mengenVorschlag, type MengenAngabe } from '$lib/bons/mengenzeilen';
+	import type { WortVorschlag } from '$lib/bons/woerter';
+	import { GRUND_TEXT, type UnsicherGrund } from './unsicher';
 	import { IMMER_NEGATIV, mitVorzeichen } from '$lib/bons/zeilenarten';
 	import type { OcrZeileKurz } from '$lib/server/ocr/anbieter';
 
@@ -13,12 +16,17 @@
 		ocrZeilen,
 		gewaehlt,
 		abweichungen,
+		unsicher = [],
+		textVorschlaege = [],
 		kategorien,
 		onwaehlen,
 		oneinfuegen,
 		onloeschen,
 		onverschieben,
-		onuebernehmen
+		onuebernehmen,
+		onwort,
+		onvorher = () => {},
+		onmengeUebernehmen
 	}: {
 		zeilen: EditorZeile[];
 		/** Zeilennummern, deren Betragsfeld gerade unlesbar ist — der Aufrufer sperrt damit
@@ -28,13 +36,42 @@
 		gewaehlt: number | null;
 		/** Je Zeilennummer der Betrag, der im Bild steht (aus abweichung.ts). */
 		abweichungen: Map<number, number>;
+		/** Je Zeile (Index) die Gruende fuer einen zweiten Blick (unsicher.ts); leer = keine Markierung. */
+		unsicher?: UnsicherGrund[][];
+		/** Je Zeile (Index) der Wortvorschlag fuer den jetzigen Text (woerter.ts). */
+		textVorschlaege?: ({ text: string; woerter: WortVorschlag[] } | null)[];
 		kategorien: { id: string; name: string; oberName: string | null }[];
 		onwaehlen: (index: number) => void;
 		oneinfuegen: (nachIndex: number) => void;
 		onloeschen: (index: number) => void;
 		onverschieben: (index: number, richtung: 1 | -1) => void;
 		onuebernehmen: (index: number, cents: number) => void;
+		/** Bezeichnung setzen: Vorschlag uebernehmen (geratenAus = alter Text) oder zurueck (null). */
+		onwort: (index: number, text: string, geratenAus: string | null) => void;
+		/** Vor einem Handgriff, der hier in der Tabelle geschieht — fuer den Verlauf (Rueckgaengig). */
+		onvorher?: (beschreibung: string) => void;
+		/** Menge, Einheit und Einzelpreis aus der Mengenzeile im Bild (mengenzeilen.ts). */
+		onmengeUebernehmen: (index: number, a: MengenAngabe) => void;
 	} = $props();
+
+	/**
+	 * Die Mengenzeile im Bild, die zu dieser Position gehoert — nur, wenn die Zeile sie nicht
+	 * schon traegt. Sie steht mal darueber, mal darunter; der Preis entscheidet (Entwurf
+	 * 2026-11-06-pruefhilfen, §1).
+	 */
+	function mengeImBild(z: EditorZeile) {
+		if (!ocrZeilen || z.ocrZeile === null || !MONETAER.includes(z.lineType)) return null;
+		const a = mengenVorschlag(ocrZeilen, z.ocrZeile, z.totalPriceCents);
+		if (!a) return null;
+		const traegt = mengeAlsZahl(z.quantity) === Number(a.menge) && z.unitPriceCents !== null && Math.abs(z.unitPriceCents) === a.einzelCents;
+		return traegt ? null : a;
+	}
+
+	const mengeText = (a: MengenAngabe) =>
+		a.einheit === 'kg'
+			? `${a.menge.replace('.', ',')} kg × ${formatCents(a.einzelCents)}/kg`
+			: `${a.menge} × ${formatCents(a.einzelCents)}`;
+	const WO = { oben: 'darüber', unten: 'darunter', selbst: 'in der Zeile' } as const;
 
 	/**
 	 * Zwei Zeilen je Position statt acht Spalten.
@@ -89,6 +126,11 @@
 		{@const k = schluessel(zeile)}
 		{@const istGeld = MONETAER.includes(zeile.lineType)}
 		{@const rechnung = rechenprobe(zeile)}
+		{@const menge = mengeImBild(zeile)}
+		{@const gruende = unsicher[i] ?? []}
+		{@const vorschlag = textVorschlaege[i] ?? null}
+		<!-- Nur Gruende ohne eigenen Hinweis darunter; Rechnung, Wort und „Im Bild steht“ sagen es selbst. -->
+		{@const stumm = gruende.filter((g) => g === 'schwer_lesbar' || g === 'ohne_bildzeile' || (g === 'preis_nicht_am_rand' && imBild === undefined))}
 		<!-- Ein Klick irgendwo waehlt die Position; onfocusin tut dasselbe fuer die
 		     Tastatur, damit das Bild beim Durchtabben mitgeht. -->
 		<!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -101,7 +143,9 @@
 				? 'var(--color-tuerkis)'
 				: imBild !== undefined
 					? 'var(--color-rot)'
-					: 'transparent'}"
+					: gruende.length > 0
+						? 'var(--color-bernstein-strich)'
+						: 'transparent'}"
 			onclick={() => onwaehlen(i)}
 			onfocusin={() => onwaehlen(i)}
 		>
@@ -227,9 +271,49 @@
 					<button
 						type="button"
 						class="rounded-md border border-bernstein-strich px-2 py-0.5 font-extrabold text-bernstein"
-						onclick={() => (zeilen[i].unitPriceCents = null)}
+						onclick={() => {
+							onvorher(`Einzelpreis in Zeile ${zeile.lineNo} entfernt`);
+							zeilen[i].unitPriceCents = null;
+						}}
 					>
 						Einzelpreis entfernen
+					</button>
+				</p>
+			{/if}
+			{#if stumm.length > 0}
+				<p class="mt-1.5 pl-8 text-[11.5px] font-bold text-bernstein">
+					unsicher: {stumm.map((g) => GRUND_TEXT[g]).join(' · ')}
+				</p>
+			{/if}
+			{#if zeile.geratenAus}
+				<p class="mt-1.5 flex flex-wrap items-center gap-2 pl-8 text-[11.5px] font-bold text-bernstein">
+					geraten aus „{zeile.geratenAus}“
+					<button
+						type="button"
+						class="rounded-md border border-bernstein-strich px-2 py-0.5 font-extrabold text-bernstein"
+						onclick={() => onwort(i, zeile.geratenAus!, null)}>zurück</button
+					>
+				</p>
+			{/if}
+			{#if vorschlag}
+				<p class="mt-1.5 flex flex-wrap items-center gap-2 pl-8 text-[11.5px] font-bold text-bernstein">
+					Meinst du „{vorschlag.text}“?
+					<button
+						type="button"
+						class="rounded-md border border-bernstein-strich px-2 py-0.5 font-extrabold text-bernstein"
+						onclick={() => onwort(i, vorschlag.text, zeile.geratenAus ?? zeile.rawText)}>übernehmen</button
+					>
+				</p>
+			{/if}
+			{#if menge}
+				<p class="mt-1.5 flex flex-wrap items-center gap-2 pl-8 text-[11.5px] font-bold text-bernstein">
+					Im Bild {WO[menge.richtung]} steht {mengeText(menge)}
+					<button
+						type="button"
+						class="rounded-md border border-bernstein-strich px-2 py-0.5 font-extrabold text-bernstein"
+						onclick={() => onmengeUebernehmen(i, menge)}
+					>
+						{mengeText(menge)} übernehmen
 					</button>
 				</p>
 			{/if}

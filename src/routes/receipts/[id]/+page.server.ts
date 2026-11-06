@@ -8,6 +8,7 @@ import { stapelLaden } from '$lib/server/receipts/stapel';
 import { originalKurz } from '$lib/server/bons/doppelt';
 import { darfBonVerwerfen } from '$lib/server/zugriff/kontext';
 import { vonReserveGelesen } from '$lib/bons/anzeige';
+import { wortschatzLaden } from '$lib/server/bons/wortschatz';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ params, locals }) => {
@@ -40,7 +41,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		.orderBy(desc(extractionRuns.createdAt))
 		.limit(1);
 	const ober = alias(categories, 'ober');
-	const [kategorien, stapel, original] = await Promise.all([
+	// Raten nur, wo noch geprueft wird (Entwurf 2026-11-06-pruefhilfen, §2b): bestaetigte Bons
+	// sind geprueft, die anderen gesperrt.
+	const raten = receipt.status === 'review' || receipt.status === 'failed';
+	const [kategorien, stapel, original, wortschatz] = await Promise.all([
 		db
 			.select({ id: categories.id, name: categories.name, oberName: ober.name })
 			.from(categories)
@@ -60,7 +64,8 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		stapelLaden(db, k, receipt.id),
 		// Nur fuer den Doppel-Hinweis. null auch dann, wenn es ein Original gibt, das dieser
 		// Mensch nicht (mehr) sehen darf — dann sagt das Band nur, dass es eines gab.
-		receipt.vermutetesOriginalId ? originalKurz(db, k, receipt.vermutetesOriginalId) : null
+		receipt.vermutetesOriginalId ? originalKurz(db, k, receipt.vermutetesOriginalId) : null,
+		raten ? wortschatzLaden(db, k) : { woerter: [] as [string, number][], getippt: [] as string[] }
 	]);
 
 	return {
@@ -72,6 +77,10 @@ export const load: PageServerLoad = async ({ params, locals }) => {
 		kategorien,
 		stapel,
 		original,
+		// Woerter der bestaetigten Bons mit Haeufigkeit — die Ansicht raet daraus (woerter.ts).
+		wortschatz: wortschatz.woerter,
+		// Davon die, die ein Mensch getippt hat: nur dorthin wird gleich eingesetzt (I5).
+		wortschatzGetippt: wortschatz.getippt,
 		// Cloud-Reserve: der Vermerk, wenn der juengste Lauf von der Reserve kam (Entwurf 2026-10-01).
 		vonReserve: vonReserveGelesen(receipt.status, lauf),
 		// Verwerfen darf, wer ihn hochgeladen hat, und der Verwalter (bons/papierkorb.ts).

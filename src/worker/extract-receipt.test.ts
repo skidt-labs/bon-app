@@ -252,6 +252,24 @@ describe('handleExtractJobs', () => {
     expect(args.problems.some((p) => p.includes('Preis von 1,79 auf 1,09 korrigiert'))).toBe(true);
   });
 
+  // 0.13.0: die Mengenzeile steht mal ueber, mal unter der Ware — der Preis entscheidet.
+  it('gibt der Ware die Angabe aus der Mengenzeile, deren Produkt ihr Betrag ist', async () => {
+    const box = (x: number, y: number, w = 60) => [x, y, w, 20] as [number, number, number, number];
+    const zeilen = [
+      { text: '2 x 1,09', box: box(30, 70, 120), confidence: 90 },
+      { text: 'MILCH', box: box(10, 100, 100), confidence: 90 },
+      { text: '2,18', box: box(400, 101), confidence: 90 }
+    ];
+    const ohneMenge = { ...extracted, totalGrossCents: 218, items: [{ ...extracted.items[0], quantity: null, unit: null, unitPriceCents: null, totalPriceCents: 218 }] };
+    const d = deps({
+      provider: { id: 'test', model: 'test-1', extract: vi.fn(async () => extraktionsErgebnis(ohneMenge, { ocrZeilen: zeilen })) }
+    });
+    await handleExtractJobs([job('r1')] as never, d as never);
+    const args = d.saveResult.mock.calls[0][0];
+    expect(args.result.items[0]).toMatchObject({ quantity: '2', unit: 'stk', unitPriceCents: 109, totalPriceCents: 218 });
+    expect(args.problems.some((p) => p.includes('aus der Mengenzeile darüber übernommen'))).toBe(true);
+  });
+
   // Abschlusspruefung 0.12.0, Wichtig 2: eine positiv gelesene Pfandrueckgabe kommt schon
   // negativ in die Summenprobe und die Ansicht — nicht erst still beim Speichern.
   it('gleicht das Vorzeichen von Rabatt und Pfandrueckgabe vor der Summenprobe an', async () => {

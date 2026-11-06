@@ -30,6 +30,21 @@ export type EditorZeile = {
 	categoryId: string | null;
 	/** Index der OCR-Zeile im Bild, aus Etappe 2. Nur zum Anzeigen, nie zum Speichern. */
 	ocrZeile: number | null;
+	/**
+	 * Der gelesene Text, wenn die Ansicht ein Wort geraten hat (woerter.ts) — fuer „zurück“.
+	 * Nur in der Ansicht, nie gesendet (`senden` listet die Felder ausdruecklich).
+	 */
+	geratenAus?: string | null;
+};
+
+/** Die Kopfdaten in der Pruefansicht, wie sie gesendet werden. */
+export type Kopf = {
+	merchantNameRaw: string | null;
+	purchasedAt: string | null;
+	totalGrossCents: number | null;
+	paymentMethod: string | null;
+	/** Der Schalter „privat behalten“. Wandert als Teil von `kopf` in den Rumpf der Anfrage. */
+	privatBehalten: boolean;
 };
 
 /**
@@ -98,16 +113,15 @@ export function positionssumme(zeilen: EditorZeile[]): number {
 }
 
 /**
- * Was das Bestaetigen sperrt. Bewusst NICHT dabei: die Differenz zur Endsumme — ein Bon
- * darf mit Differenz bestaetigt werden, wenn der Mensch das entscheidet (Entwurf §2).
- * Sie steht als Hinweis in der Kopfzeile und bleibt danach als `sum_mismatch` in
- * `needs_review_reason`, damit der Bericht sie kennt.
+ * Was die App beim Bestaetigen VERMUTET, ohne es zu wissen (Entwurf 2026-11-06-pruefhilfen,
+ * §4a). Bis 0.12 sperrte das; seitdem fragt die Ansicht nur nach („Trotzdem bestätigen?“) —
+ * wer den Bon geprueft hat, hat das letzte Wort. Es gibt Gratisartikel, und ein Bezug ins
+ * Leere ist ein Tippfehler, den „Trotzdem“ leert (bezuegeLeeren).
  *
- * Die Bezugspruefungen spiegeln absichtlich, was der Server ohnehin ablehnt
- * (receipts/korrekturen.ts): faellt es erst dort auf, sieht der Mensch einen 400er
- * statt eines Hinweises an der Zeile, die er anfassen muss.
+ * Bewusst NICHT dabei: die Differenz zur Endsumme — sie steht als Hinweis in der Kopfzeile
+ * und bleibt danach als `sum_mismatch` in `needs_review_reason`, damit der Bericht sie kennt.
  */
-export function pruefeVorBestaetigen(zeilen: EditorZeile[]): string[] {
+export function vermutungen(zeilen: EditorZeile[]): string[] {
 	const hinweise: string[] = [];
 	const nummern = new Set(zeilen.map((z) => z.lineNo));
 	for (const z of zeilen) {
@@ -121,6 +135,19 @@ export function pruefeVorBestaetigen(zeilen: EditorZeile[]): string[] {
 		}
 	}
 	return hinweise;
+}
+
+/**
+ * Leert Bezuege, die der Server ablehnen wuerde (auf sich selbst, auf eine Zeile, die es
+ * nicht gibt — receipts/korrekturen.ts). `geleert` nennt die Zeilen, damit die Ansicht es
+ * sagen kann. Ohne solche Bezuege kommt dasselbe Feld zurueck.
+ */
+export function bezuegeLeeren(zeilen: EditorZeile[]): { zeilen: EditorZeile[]; geleert: number[] } {
+	const nummern = new Set(zeilen.map((z) => z.lineNo));
+	const kaputt = (z: EditorZeile) => z.appliesToLine !== null && (z.appliesToLine === z.lineNo || !nummern.has(z.appliesToLine));
+	const geleert = zeilen.filter(kaputt).map((z) => z.lineNo);
+	if (geleert.length === 0) return { zeilen, geleert };
+	return { zeilen: zeilen.map((z) => (kaputt(z) ? { ...z, appliesToLine: null } : z)), geleert };
 }
 
 /**

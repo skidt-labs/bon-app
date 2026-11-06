@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { asc, count, eq } from 'drizzle-orm';
 import { db } from '$lib/server/db';
-import { merchants, receipts, receiptItems } from '$lib/server/db/schema';
+import { categories, merchants, receipts, receiptItems } from '$lib/server/db/schema';
 import { testHaushalt, zurueckgerollt, type Tx } from '$lib/server/db/testdaten';
 import type { Zugriffskontext } from '$lib/server/zugriff/kontext';
 import { korrekturenSchema, korrekturenAnwenden, KorrekturVerfehlt } from './korrekturen';
@@ -255,5 +255,124 @@ describe.skipIf(AUS)('korrekturenAnwenden gegen die echte Datenbank', () => {
 		});
 
 		expect(await db.select({ id: receipts.id }).from(receipts).where(eq(receipts.id, bonId))).toHaveLength(0);
+	});
+
+	// 0.13.0 (Entwurf 2026-11-06-pruefhilfen, §4b): „Meine Fassung speichern“ nach einer 409.
+	describe('ueberschreiben', () => {
+		/** Die Fassung der Seite: Zeilen mit den Ids, die sie kennt. */
+		const fassung = (zeilen: { id: string | null; rawText: string }[], extra: Record<string, unknown> = {}) =>
+			korrekturenSchema.parse({
+				receipt: { merchantNameRaw: 'Musterladen', purchasedAt: null, totalGrossCents: 300, paymentMethod: null },
+				items: zeilen.map((z, i) => ({
+					id: z.id,
+					lineNo: i + 1,
+					rawText: z.rawText,
+					lineType: 'article',
+					quantity: null,
+					unit: null,
+					unitPriceCents: null,
+					totalPriceCents: 100,
+					vatClass: null,
+					appliesToLine: null,
+					categoryId: null
+				})),
+				geloescht: [],
+				...extra
+			});
+		const zeilenVon = (tx: Tx, id: string) =>
+			tx.select().from(receiptItems).where(eq(receiptItems.receiptId, id)).orderBy(asc(receiptItems.lineNo));
+
+		it('legt eine Zeile mit unbekannter Id neu an und loescht nicht erwaehnte', async () => {
+			await zurueckgerollt(async (tx) => {
+				const ich = await testHaushalt(tx);
+				const { id, zeilen } = await bonMitZeilen(tx, ich.k);
+				// Die Seite kennt Zeile 1 und 2 und eine Id, die es nicht (mehr) gibt; 3 und 4 kennt sie nicht.
+				const k = fassung(
+					[
+						{ id: zeilen[0].id, rawText: 'BUTTER' },
+						{ id: zeilen[1].id, rawText: 'MILCH' },
+						{ id: '00000000-0000-4000-8000-000000000001', rawText: 'EISBERGSALAT' }
+					],
+					{ ueberschreiben: true }
+				);
+				let zaehlung: { neu: number; geloescht: number } | null = null;
+				await korrekturenAnwenden(tx, id, k, {
+					bestaetigen: true,
+					userId: ich.nutzerId,
+					ausStatus: 'review',
+					beimUeberschreiben: (z) => (zaehlung = z)
+				});
+				const nachher = await zeilenVon(tx, id);
+				expect(nachher.map((z) => z.rawText)).toEqual(['BUTTER', 'MILCH', 'EISBERGSALAT']);
+				expect(nachher[2].id).not.toBe('00000000-0000-4000-8000-000000000001');
+				expect(zaehlung).toEqual({ neu: 1, geloescht: 2 });
+				const [kopf] = await tx.select().from(receipts).where(eq(receipts.id, id));
+				expect(kopf.status).toBe('confirmed');
+			});
+		});
+
+		it('ohne ueberschreiben bleibt es bei KorrekturVerfehlt (Zeilen), nichts geaendert', async () => {
+			await zurueckgerollt(async (tx) => {
+				const ich = await testHaushalt(tx);
+				const { id, zeilen } = await bonMitZeilen(tx, ich.k);
+				const k = fassung([{ id: zeilen[0].id, rawText: 'BUTTER' }]);
+				const fehler = await tx
+					.transaction((innen) => korrekturenAnwenden(innen, id, k, { bestaetigen: true, userId: ich.nutzerId, ausStatus: 'review' }))
+					.catch((e) => e);
+				expect(fehler).toBeInstanceOf(KorrekturVerfehlt);
+				expect((fehler as KorrekturVerfehlt).art).toBe('zeilen');
+				expect(await zeilenVon(tx, id)).toHaveLength(4);
+			});
+		});
+
+		it('geloescht und zugleich gesendet gilt als gesendet; unbekannte zu loeschende Id wird uebergangen', async () => {
+			await zurueckgerollt(async (tx) => {
+				const ich = await testHaushalt(tx);
+				const { id, zeilen } = await bonMitZeilen(tx, ich.k);
+				const k = fassung(
+					zeilen.map((z) => ({ id: z.id, rawText: z.rawText })),
+					{ ueberschreiben: true, geloescht: [zeilen[0].id, '00000000-0000-4000-8000-000000000002'] }
+				);
+				await korrekturenAnwenden(tx, id, k, { bestaetigen: false, userId: ich.nutzerId, ausStatus: 'review' });
+				expect(await zeilenVon(tx, id)).toHaveLength(4);
+			});
+		});
+
+		// Abschlusspruefung 0.13.0, I6: eine veraltete Zeile, die beim Ueberschreiben neu angelegt
+		// wird, ist keine Hand-Zuordnung — sonst lernte das Gedaechtnis Kategorien des Modells.
+		it('eine veraltete Zeile wird ohne Lernen und ohne „manual“ neu angelegt', async () => {
+			await zurueckgerollt(async (tx) => {
+				const ich = await testHaushalt(tx);
+				const { id, zeilen } = await bonMitZeilen(tx, ich.k);
+				const [kat] = await tx.select({ id: categories.id }).from(categories).limit(1);
+				const k = fassung(
+					[...zeilen.map((z) => ({ id: z.id, rawText: z.rawText })), { id: '00000000-0000-4000-8000-000000000003', rawText: 'ALTE ZEILE' }],
+					{ ueberschreiben: true }
+				);
+				k.items[4].categoryId = kat.id;
+				const gelernt = await korrekturenAnwenden(tx, id, k, { bestaetigen: false, userId: ich.nutzerId, ausStatus: 'review' });
+				expect(gelernt).toEqual([]);
+				const neu = (await zeilenVon(tx, id)).find((z) => z.rawText === 'ALTE ZEILE')!;
+				expect(neu.categoryId).toBe(kat.id);
+				expect(neu.categorySource).not.toBe('manual');
+			});
+		});
+
+		// Review Focus 2: ein inzwischen bestaetigter (oder weggeworfener) Bon wird nie ueberschrieben.
+		it('Status geaendert: KorrekturVerfehlt (Status) auch mit ueberschreiben, nichts geaendert', async () => {
+			await zurueckgerollt(async (tx) => {
+				const ich = await testHaushalt(tx);
+				const { id, zeilen } = await bonMitZeilen(tx, ich.k);
+				await tx.update(receipts).set({ status: 'confirmed', confirmedAt: new Date() }).where(eq(receipts.id, id));
+				const k = fassung([{ id: zeilen[0].id, rawText: 'ANDERS' }], { ueberschreiben: true });
+				const fehler = await tx
+					.transaction((innen) => korrekturenAnwenden(innen, id, k, { bestaetigen: true, userId: ich.nutzerId, ausStatus: 'review' }))
+					.catch((e) => e);
+				expect(fehler).toBeInstanceOf(KorrekturVerfehlt);
+				expect((fehler as KorrekturVerfehlt).art).toBe('status');
+				const nachher = await zeilenVon(tx, id);
+				expect(nachher.map((z) => z.rawText)).toEqual(['BUTTER', 'MILCH', 'KAESE', 'BROT']);
+			});
+		});
 	});
 });

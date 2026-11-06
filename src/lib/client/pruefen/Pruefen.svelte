@@ -2,7 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { dialog } from '$lib/client/dialog';
 	import { nachKorbFehler } from './rueckfrage';
-	import { vorzeichenAngleichen } from '$lib/bons/zeilenarten';
+	import { mitVorzeichen, vorzeichenAngleichen } from '$lib/bons/zeilenarten';
 	import { tick } from 'svelte';
 	import { mitWartezustand, nachladenAlle, NACHLADEN_MS } from '$lib/client/warten';
 	import { formatCents } from '$lib/money';
@@ -23,12 +23,16 @@
 	import Positionen from './Positionen.svelte';
 	import { abweichungen as abweichungenAus } from './abweichung';
 	import { rechenprobe } from './rechenprobe';
+	import { unsicherGruende, wortsRaten } from './unsicher';
+	import { Verlauf, istTextfeld, strgZ, wiederherstellen, type Stand } from './verlauf';
+	import { textVorschlag } from '$lib/bons/woerter';
 	import {
 		zeileEinfuegen,
 		zeileLoeschen,
 		zeileVerschieben,
 		positionssumme,
-		pruefeVorBestaetigen,
+		vermutungen,
+		bezuegeLeeren,
 		handEingabeBegonnen,
 		kopieSchluessel,
 		selberBon,
@@ -75,6 +79,10 @@
 			darfVerwerfen: boolean;
 			/** Hat die Cloud-Reserve den Bon gelesen? Dann ein ruhiger Vermerk (Entwurf 2026-10-01). */
 			vonReserve?: boolean;
+			/** Woerter der bestaetigten Bons mit Haeufigkeit — leer, wo nicht geraten wird. */
+			wortschatz?: [string, number][];
+			/** Davon die Woerter, die ein Mensch getippt hat — nur dorthin wird gleich eingesetzt. */
+			wortschatzGetippt?: string[];
 		};
 	} = $props();
 
@@ -102,6 +110,19 @@
 	let vollbild = $state(false);
 
 	/**
+	 * Rueckgaengig (Entwurf 2026-11-06-pruefhilfen, §3). Der Verlauf ist rein; `schritte` fuehrt
+	 * seine Laenge fuer die Vorlage nach. `schatten` ist der Stand beim Betreten eines Felds —
+	 * er wandert erst beim ersten Tippen in den Verlauf, damit der Schritt den Stand VOR der
+	 * Eingabe traegt und zehn Buchstaben ein Schritt sind.
+	 */
+	const verlauf = new Verlauf();
+	let schritte = $state(0);
+	let schatten: Stand | null = null;
+	/** Ruhige Meldung unten (nicht rot): „Rückgängig: …“, „Zeile 4 gelöscht · Rückgängig“. */
+	let hinweis = $state<{ text: string; rueckgaengig: boolean } | null>(null);
+	let hinweisUhr: ReturnType<typeof setTimeout> | undefined;
+
+	/**
 	 * Ein bestaetigter Bon geht nicht von selbst auf. Er bleibt bestaetigt — die Felder
 	 * werden nur entriegelt, wenn jemand „Korrigieren" drueckt. So kann man einen Fehler
 	 * nachtraeglich geradeziehen (er faellt oft erst Wochen spaeter auf), ohne dass ein
@@ -123,13 +144,13 @@
 	const originalImPapierkorb = $derived(data.original?.status === 'verworfen');
 	const offen = $derived(!wartet && !alsDoppel && !imPapierkorb && (!bestaetigt || entriegelt));
 	/** Welche Rueckfrage gerade offen ist — in der Seite, weil confirm() hier nicht taugt. */
-	let rueckfrage = $state<null | 'verwerfen' | 'loeschen' | 'bild'>(null);
+	let rueckfrage = $state<null | 'verwerfen' | 'loeschen' | 'bild' | 'trotzdem'>(null);
 	/** Ein Fehler aus der Rueckfrage steht IN ihr, sie bleibt dann offen (1.6, 1.7). */
 	let rueckfrageFehler = $state('');
 	/** Welcher Knopf der Bild-Rueckfrage gerade arbeitet — fuer „Lädt …" (1.7). */
 	let arbeit = $state<null | 'bild' | 'original'>(null);
 
-	function fragen(art: 'verwerfen' | 'loeschen' | 'bild') {
+	function fragen(art: 'verwerfen' | 'loeschen' | 'bild' | 'trotzdem') {
 		rueckfrage = art;
 		rueckfrageFehler = '';
 	}
@@ -162,10 +183,13 @@
 		angezeigt = schluessel;
 		// Ein fehlgeschlagener Bon hat keine Positionen, bestaetigen braucht aber eine:
 		// die erste leere Zeile steht schon da, damit man gleich lostippen kann.
-		zeilen =
+		const geladen =
 			data.receipt.status === 'failed' && data.items.length === 0
 				? zeileEinfuegen([], -1)
 				: vorzeichenAngleichen(data.items.map((i) => ({ ...i })));
+		// Sichere Vermutungen gleich einsetzen (Entwurf 2026-11-06-pruefhilfen, §2b) — gespeichert
+		// wird erst mit Spaeter/Bestaetigen. Der Wortschatz kommt nur fuer review/failed.
+		zeilen = wortsRaten(geladen, wortschatz, getippt);
 		const d = data.receipt.purchasedAt;
 		kopf = {
 			merchantNameRaw: data.receipt.merchantNameRaw,
@@ -187,6 +211,8 @@
 		bildZeile = null;
 		entriegelt = false;
 		meldung = '';
+		konflikt = null;
+		verlaufLeeren();
 	});
 
 	// 2.6: Solange der Bon aufs Lesen wartet, alle 5 s neu laden. Endet das Warten, wechselt
@@ -198,6 +224,13 @@
 	/** 2.7: Der Wartezustand endet erst, wenn auch das Neuladen bzw. Weiterblaettern fertig ist. */
 	const warte = <T,>(f: () => Promise<T>) => mitWartezustand((an) => (busy = an), f);
 
+	const wortschatz = $derived(new Map(data.wortschatz ?? []));
+	const getippt = $derived(new Set(data.wortschatzGetippt ?? []));
+	/** Je Zeile der Wortvorschlag fuer den jetzigen Text (woerter.ts), sonst null. */
+	const textVorschlaege = $derived(zeilen.map((z) => textVorschlag(z.rawText, wortschatz, getippt)));
+	/** Je Zeile, warum sie einen zweiten Blick lohnt (unsicher.ts). Sperrt nichts. */
+	const unsicher = $derived(zeilen.map((z, i) => unsicherGruende(z, data.ocrZeilen, textVorschlaege[i]?.woerter ?? null)));
+	const unsicherZahl = $derived(unsicher.filter((g) => g.length > 0).length);
 	const summe = $derived(positionssumme(zeilen));
 	const differenz = $derived(kopf.totalGrossCents === null ? 0 : summe - kopf.totalGrossCents);
 	const abw = $derived(abweichungenAus(zeilen, data.ocrZeilen));
@@ -217,7 +250,6 @@
 	 * Mensch gar nicht sieht.
 	 */
 	const sperren = $derived([
-		...pruefeVorBestaetigen(zeilen),
 		...(ungueltigeZeilen.length > 0
 			? [
 					`Der Betrag in ${ungueltigeZeilen.length === 1 ? 'Zeile' : 'den Zeilen'} ${ungueltigeZeilen.join(', ')} ist nicht lesbar.`
@@ -230,6 +262,13 @@
 			? ['Bitte die Endsumme eintragen.']
 			: [])
 	]);
+	/**
+	 * Was die App nur VERMUTET (Entwurf 2026-11-06-pruefhilfen, §4a): Betrag 0, Bezug ins Leere
+	 * oder auf sich selbst. Haelt nicht auf — „Bestätigen“ fragt nach, „Später“ gar nicht.
+	 */
+	const vermutet = $derived(vermutungen(zeilen));
+	/** Wessen Bezug „Trotzdem“ leeren wuerde — fuer den Satz in der Rueckfrage. */
+	const leereBezuege = $derived(bezuegeLeeren(zeilen).geleert);
 	/** Nur bei einem fehlgeschlagenen Bon von Belang: steht schon etwas Eigenes da? */
 	const begonnen = $derived(handEingabeBegonnen(kopf, zeilen));
 
@@ -249,9 +288,19 @@
 		gewaehlt = i >= 0 ? i : null;
 	}
 
-	/** null: nicht gespeichert (die Meldung steht in `meldung`). */
-	async function senden(bestaetigen: boolean): Promise<{ doppelt: boolean } | null> {
+	/**
+	 * Eine 409 beim Speichern oder Bestaetigen (Entwurf 2026-11-06-pruefhilfen, §4b): nie eine
+	 * Sackgasse. `veraltet` bietet „Meine Fassung speichern“ (dieselbe Handlung mit
+	 * `ueberschreiben`), `status`/`doppel` das Neuladen. Am 06.11.2026 hing ein Bon 20 Minuten
+	 * in einer Schleife aus roten Saetzen, die nur „neu laden“ sagten.
+	 */
+	type Aktion = 'bestaetigen' | 'spaeter' | 'korrektur';
+	let konflikt = $state<{ code: 'veraltet' | 'status' | 'doppel'; satz: string; aktion: Aktion } | null>(null);
+
+	/** null: nicht gespeichert (die Meldung steht in `meldung` oder `konflikt`). */
+	async function senden(bestaetigen: boolean, aktion: Aktion, ueberschreiben = false): Promise<{ doppelt: boolean } | null> {
 		meldung = '';
+		konflikt = null;
 		try {
 			const res = await fetch(`/api/receipts/${data.receipt.id}${bestaetigen ? '/confirm' : ''}`, {
 				method: bestaetigen ? 'POST' : 'PUT',
@@ -274,22 +323,33 @@
 						appliesToLine: z.appliesToLine,
 						categoryId: z.categoryId
 					})),
-					geloescht
+					geloescht,
+					ueberschreiben,
+					// Mit welchem Status diese Seite den Bon kennt — der Server lehnt ab, wenn er
+					// inzwischen anders steht (anderes Fenster), statt ihn zu ueberschreiben.
+					erwartet: data.receipt.status
 				})
 			});
 			if (!res.ok) {
 				const text = await res.text().catch(() => '');
 				let satz = `Speichern fehlgeschlagen (HTTP ${res.status}).`;
+				let code: string | undefined;
 				try {
-					const j = JSON.parse(text) as { message?: string };
+					const j = JSON.parse(text) as { message?: string; code?: string };
 					if (j.message) satz = j.message;
+					code = j.code;
 				} catch {
 					/* kein JSON — der Statussatz bleibt */
 				}
-				meldung = satz;
+				if (res.status === 409 && (code === 'veraltet' || code === 'status' || code === 'doppel')) {
+					konflikt = { code, satz, aktion };
+				} else {
+					meldung = satz;
+				}
 				return null;
 			}
 			geloescht = [];
+			verlaufLeeren();
 			// Ein von Hand eingetragener Fehlschlag kann sich als Doppel herausstellen: dann
 			// ist er gespeichert, aber NICHT bestaetigt (confirm/+server.ts).
 			const antwort = (await res.json().catch(() => null)) as { doppelt?: unknown } | null;
@@ -309,7 +369,10 @@
 		return goto(ziel ? `/receipts/${ziel}` : '/inbox');
 	}
 
-	async function spaeter() {
+	function spaeter() {
+		return spaeterSenden(false);
+	}
+	async function spaeterSenden(ueberschreiben: boolean) {
 		await warte(async () => {
 			// Unberuehrter Fehlschlag: nichts senden. Gespeichert waere er ein Bon in Pruefung,
 			// und „Erneut lesen" gaebe es fuer ihn nicht mehr.
@@ -317,21 +380,40 @@
 				await weiter(false);
 				return;
 			}
-			if (!(await senden(false))) return;
+			bezuegeBereinigen();
+			if (!(await senden(false, 'spaeter', ueberschreiben))) return;
 			await weiter(false);
 		});
 	}
 
+	/**
+	 * Bezuege, die der Server ablehnen wuerde, vor dem Senden leeren — als eigener Schritt im
+	 * Verlauf. Zwischenspeichern und Bestaetigen bleiben damit immer moeglich (§4a).
+	 */
+	function bezuegeBereinigen(): number[] {
+		const r = bezuegeLeeren(zeilen);
+		if (r.geleert.length === 0) return [];
+		merke(`Bezug von Zeile ${r.geleert.join(', ')} entfernt`);
+		zeilen = r.zeilen;
+		return r.geleert;
+	}
+	const bezugSatz = (nr: number[]) =>
+		nr.length === 0 ? '' : ` Bezug von ${nr.length === 1 ? 'Zeile' : 'den Zeilen'} ${nr.join(', ')} entfernt.`;
+
 	/** Korrektur an einem bestaetigten Bon: speichern, Status bleibt, Felder wieder zu. */
-	async function korrekturSpeichern() {
+	function korrekturSpeichern() {
+		return korrekturSenden(false);
+	}
+	async function korrekturSenden(ueberschreiben: boolean) {
 		if (sperren.length > 0) {
 			meldung = sperren[0];
 			return;
 		}
 		await warte(async () => {
-			if (!(await senden(false))) return;
+			const geleert = bezuegeBereinigen();
+			if (!(await senden(false, 'korrektur', ueberschreiben))) return;
 			entriegelt = false;
-			meldung = 'Korrektur gespeichert.';
+			meldung = 'Korrektur gespeichert.' + bezugSatz(geleert);
 		});
 	}
 
@@ -339,6 +421,72 @@
 	function verwerfen() {
 		angezeigt = '';
 		entriegelt = false;
+		verlaufLeeren();
+	}
+
+	function standJetzt(): Stand {
+		return $state.snapshot({ zeilen, kopf, geloescht }) as Stand;
+	}
+	/** Vor jedem Handgriff: den Stand davor ablegen. */
+	function merke(beschreibung: string) {
+		verlauf.merken(standJetzt(), beschreibung);
+		schritte = verlauf.anzahl;
+		hinweisWeg();
+	}
+	function verlaufLeeren() {
+		verlauf.leeren();
+		schritte = 0;
+		schatten = null;
+		hinweisWeg();
+	}
+	function zeigeHinweis(text: string, rueckgaengig = false) {
+		clearTimeout(hinweisUhr);
+		hinweis = { text, rueckgaengig };
+		hinweisUhr = setTimeout(() => (hinweis = null), 5000);
+	}
+	function hinweisWeg() {
+		clearTimeout(hinweisUhr);
+		hinweis = null;
+	}
+	function rueckgaengig() {
+		if (!offen || busy) return;
+		const r = verlauf.zurueck();
+		if (!r) return;
+		const stand = wiederherstellen(r.stand, kopf);
+		zeilen = stand.zeilen;
+		kopf = stand.kopf;
+		geloescht = stand.geloescht;
+		schritte = verlauf.anzahl;
+		gewaehlt = null;
+		bildZeile = null;
+		verlauf.feldVerlassen();
+		schatten = null;
+		zeigeHinweis(`Rückgängig: ${r.beschreibung}`);
+	}
+	const feldName = (el: HTMLElement) =>
+		el.getAttribute('aria-label') ?? (el as HTMLInputElement).labels?.[0]?.textContent?.trim() ?? 'Eingabe';
+	/** Ein Feld betreten: neuer Besuch, Stand davor merken (noch nicht in den Verlauf). */
+	function feldFokus(e: FocusEvent) {
+		if (!istTextfeld(e.target as Element)) return;
+		verlauf.feldVerlassen();
+		schatten = standJetzt();
+	}
+	/** Erste Eingabe je Besuch: der Stand vom Betreten wird ein Schritt. */
+	function feldEingabe(e: Event) {
+		const el = e.target as HTMLElement;
+		if (!istTextfeld(el) || !schatten) return;
+		const name = feldName(el);
+		if (!verlauf.feldBesuch(name)) return;
+		verlauf.merken(schatten, `${name} geändert`);
+		schritte = verlauf.anzahl;
+		hinweisWeg();
+	}
+	/** Strg/⌘+Z ausserhalb eines Felds; im Feld bleibt das Rueckgaengig des Browsers. */
+	function taste(e: KeyboardEvent) {
+		const dialogOffen = rueckfrage !== null || konflikt !== null || bearbeitung !== null || vollbild;
+		if (!strgZ(e, { offen, dialogOffen, schritte, imTextfeld: istTextfeld(document.activeElement) })) return;
+		e.preventDefault();
+		rueckgaengig();
 	}
 
 	/**
@@ -531,8 +679,23 @@
 			meldung = sperren[0];
 			return;
 		}
+		if (vermutet.length > 0) {
+			fragen('trotzdem');
+			return;
+		}
+		await bestaetigenSenden();
+	}
+
+	/** „Trotzdem bestätigen“: ungueltige Bezuege leeren (sonst lehnt der Server ab), dann senden. */
+	async function trotzdemBestaetigen() {
+		rueckfrageSchliessen();
+		bezuegeBereinigen();
+		await bestaetigenSenden();
+	}
+
+	async function bestaetigenSenden(ueberschreiben = false) {
 		await warte(async () => {
-			const ergebnis = await senden(true);
+			const ergebnis = await senden(true, 'bestaetigen', ueberschreiben);
 			if (!ergebnis) return;
 			if (ergebnis.doppelt) {
 				// Nicht weiter: neu laden, dann steht hier das Doppel-Band mit dem Original. Erst
@@ -544,7 +707,27 @@
 			await weiter(true);
 		});
 	}
+
+	/** „Meine Fassung speichern“: dieselbe Handlung noch einmal, diesmal mit `ueberschreiben`. */
+	async function meineFassung() {
+		const k = konflikt;
+		if (!k) return;
+		konflikt = null;
+		if (k.aktion === 'bestaetigen') await bestaetigenSenden(true);
+		else if (k.aktion === 'spaeter') await spaeterSenden(true);
+		else await korrekturSenden(true);
+	}
+	/** „Neu laden“: der Bon, wie er jetzt ist — eigene Aenderungen gehen dabei verloren. */
+	async function neuLaden() {
+		await warte(async () => {
+			await invalidateAll();
+			konflikt = null;
+			angezeigt = '';
+		});
+	}
 </script>
+
+<svelte:window onkeydown={taste} />
 
 <!--
 	Eine Ansicht fuer beide Breiten, nicht zwei Komponenten. Der Unterschied ist die
@@ -553,6 +736,28 @@
 	Eine zweite Komponente haette dieselben zweihundert Zeilen Zustand, Senden und
 	Pruefen ein zweites Mal getragen — und ein zweites Mal falsch.
 -->
+{#snippet rueckgaengigKnopf()}
+	<button
+		type="button"
+		class="shrink-0 rounded-xl border border-linie bg-papier px-3 py-2 text-sm font-bold disabled:opacity-40"
+		disabled={schritte === 0 || busy || !offen}
+		onclick={rueckgaengig}
+		aria-label="Rückgängig"
+		title="Rückgängig (Strg+Z)"><span aria-hidden="true">↶</span><span class="hidden sm:inline"> Rückgängig</span></button
+	>
+{/snippet}
+
+{#snippet hinweisZeile(klasse: string)}
+	{#if hinweis}
+		<p class="flex items-center gap-2 text-[13px] font-semibold text-gedaempft {klasse}" role="status">
+			{hinweis.text}
+			{#if hinweis.rueckgaengig}
+				<button type="button" class="font-extrabold text-tuerkis-dunkel underline" onclick={rueckgaengig}>Rückgängig</button>
+			{/if}
+		</p>
+	{/if}
+{/snippet}
+
 {#snippet aktionen(klasse: string)}
 	<div class="flex items-center gap-2 {klasse}">
 		{#if imPapierkorb}
@@ -606,6 +811,7 @@
 				disabled={busy}
 				onclick={verwerfen}>Abbrechen</button
 			>
+			{@render rueckgaengigKnopf()}
 			<button
 				type="button"
 				class="flex-1 rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60 lg:flex-none"
@@ -640,6 +846,7 @@
 				disabled={busy || wartet}
 				onclick={spaeter}>Später</button
 			>
+			{@render rueckgaengigKnopf()}
 			<button
 				type="button"
 				class="flex-1 rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60 lg:flex-none"
@@ -894,7 +1101,7 @@
 
 			<!-- `display: contents`, damit das fieldset nichts am Aufbau aendert — es dient
 			     allein dazu, ALLE Felder darin auf einmal zu sperren. -->
-			<fieldset disabled={!offen} class="contents">
+			<fieldset disabled={!offen} class="contents" onfocusin={feldFokus} oninput={feldEingabe}>
 				<Kopfdaten
 					bind:merchantNameRaw={kopf.merchantNameRaw}
 					bind:purchasedAt={kopf.purchasedAt}
@@ -903,7 +1110,7 @@
 					bind:summeUngueltig
 				/>
 
-			{#if beanstandungen.length || abw.size || sperren.length || rechnungOffen}
+			{#if beanstandungen.length || abw.size || sperren.length || rechnungOffen || (offen && unsicherZahl) || (offen && vermutet.length)}
 				<div
 					class="flex flex-wrap items-center gap-x-5 gap-y-1 rounded-xl bg-bernstein-flaeche px-3.5 py-2.5 text-[13px] font-semibold text-bernstein"
 				>
@@ -915,7 +1122,12 @@
 							>bei {rechnungOffen}
 							{rechnungOffen === 1 ? 'Zeile geht' : 'Zeilen geht'} die Rechnung nicht auf</span
 						>{/if}
+					{#if offen && unsicherZahl}<span
+							>{unsicherZahl}
+							{unsicherZahl === 1 ? 'Position' : 'Positionen'} unsicher</span
+						>{/if}
 					{#each sperren as s (s)}<span class="text-rot-dunkel">{s}</span>{/each}
+					{#if offen}{#each vermutet as v (v)}<span>Hinweis: {v}</span>{/each}{/if}
 					{#if beanstandungen.length}<span>{beanstandungen.join(' · ')}</span>{/if}
 				</div>
 			{/if}
@@ -933,24 +1145,49 @@
 				ocrZeilen={data.ocrZeilen}
 				{gewaehlt}
 				abweichungen={abw}
+				unsicher={offen ? unsicher : []}
+				{textVorschlaege}
 				kategorien={data.kategorien}
 				onwaehlen={waehlen}
-				oneinfuegen={(i) => (zeilen = zeileEinfuegen(zeilen, i))}
+				oneinfuegen={(i) => {
+					merke(`Zeile unter ${zeilen[i].lineNo} eingefügt`);
+					zeilen = zeileEinfuegen(zeilen, i);
+				}}
 				onloeschen={(i) => {
+					const nr = zeilen[i].lineNo;
+					merke(`Zeile ${nr} gelöscht`);
 					const r = zeileLoeschen(zeilen, i);
 					zeilen = r.zeilen;
 					geloescht = [...geloescht, ...r.geloescht];
 					gewaehlt = null;
 					bildZeile = null;
+					zeigeHinweis(`Zeile ${nr} gelöscht`, true);
 				}}
 				onverschieben={(i, richtung) => {
+					merke(`Zeile ${zeilen[i].lineNo} verschoben`);
 					zeilen = zeileVerschieben(zeilen, i, richtung);
 					// Die Auswahl wandert mit der Zeile, nicht mit der Stelle — sonst
 					// zeigt das Bild nach dem Verschieben auf die Nachbarzeile.
 					if (gewaehlt === i) gewaehlt = i + richtung;
 					else if (gewaehlt === i + richtung) gewaehlt = i;
 				}}
-				onuebernehmen={(i, cents) => (zeilen[i].totalPriceCents = cents)}
+				onuebernehmen={(i, cents) => {
+					merke(`Betrag in Zeile ${zeilen[i].lineNo} übernommen`);
+					zeilen[i].totalPriceCents = cents;
+				}}
+				onvorher={merke}
+				onwort={(i, text, geratenAus) => {
+					merke(`Bezeichnung in Zeile ${zeilen[i].lineNo}`);
+					zeilen[i].rawText = text;
+					zeilen[i].geratenAus = geratenAus;
+				}}
+				onmengeUebernehmen={(i, a) => {
+					merke(`Menge in Zeile ${zeilen[i].lineNo} übernommen`);
+					const z = zeilen[i];
+					z.quantity = a.menge;
+					z.unit = a.einheit;
+					z.unitPriceCents = mitVorzeichen(z.lineType, a.einzelCents);
+				}}
 			/>
 
 			<div
@@ -959,7 +1196,10 @@
 				<button
 					type="button"
 					class="font-bold text-tuerkis-dunkel"
-					onclick={() => (zeilen = zeileEinfuegen(zeilen, zeilen.length - 1))}>+ Zeile</button
+					onclick={() => {
+						merke('Zeile angefügt');
+						zeilen = zeileEinfuegen(zeilen, zeilen.length - 1);
+					}}>+ Zeile</button
 				>
 				<span class="ml-auto tabular-nums">
 					Positionen <b class="text-tinte">{formatCents(summe)} €</b> · Endsumme
@@ -973,6 +1213,7 @@
 			</div>
 			</fieldset>
 			{#if meldung}<p class="pb-2 text-sm font-semibold text-rot-dunkel">{meldung}</p>{/if}
+			{@render hinweisZeile('hidden pb-2 lg:flex')}
 		</main>
 	</div>
 
@@ -983,6 +1224,7 @@
 		class="fixed inset-x-0 bottom-0 z-10 border-t border-linie bg-papier px-4 pt-2.5 lg:hidden"
 		style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 10px)"
 	>
+		{@render hinweisZeile('pb-2')}
 		{@render aktionen('')}
 	</div>
 </div>
@@ -1001,9 +1243,24 @@
 					? 'Bon in den Papierkorb legen?'
 					: rueckfrage === 'bild'
 						? 'Bild bearbeiten?'
-						: 'Bon endgültig löschen?'}
+						: rueckfrage === 'trotzdem'
+							? 'Trotzdem bestätigen?'
+							: 'Bon endgültig löschen?'}
 			</b>
-			<p class="text-gedaempft">
+			{#if rueckfrage === 'trotzdem'}
+				<div class="grid gap-1.5 text-gedaempft">
+					<p>Die App ist bei diesem Bon nicht sicher:</p>
+					<ul class="list-disc pl-5">
+						{#each vermutet as v (v)}<li>{v}</li>{/each}
+					</ul>
+					{#if leereBezuege.length}<p>
+							Der Bezug von {leereBezuege.length === 1 ? 'Zeile' : 'den Zeilen'}
+							{leereBezuege.join(', ')} wird entfernt.
+						</p>{/if}
+					<p>Wenn du den Bon so geprüft hast, bestätige ihn trotzdem.</p>
+				</div>
+			{/if}
+			<p class="text-gedaempft" class:hidden={rueckfrage === 'trotzdem'}>
 				{#if rueckfrage === 'bild'}
 					Nach dem Bearbeiten wird der Bon neu gelesen, die Positionen werden ersetzt.
 					{#if data.receipt.status === 'failed' && begonnen}Was du schon eingetragen hast, geht dabei verloren.{/if}
@@ -1025,9 +1282,16 @@
 					class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold disabled:opacity-60"
 					data-autofocus
 					disabled={busy}
-					onclick={rueckfrageSchliessen}>Abbrechen</button
+					onclick={rueckfrageSchliessen}>{rueckfrage === 'trotzdem' ? 'Zurück zum Bon' : 'Abbrechen'}</button
 				>
-				{#if rueckfrage === 'bild'}
+				{#if rueckfrage === 'trotzdem'}
+					<button
+						type="button"
+						class="rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+						disabled={busy}
+						onclick={trotzdemBestaetigen}>Trotzdem bestätigen</button
+					>
+				{:else if rueckfrage === 'bild'}
 					{#if data.receipt.originalImagePath}
 						<button
 							type="button"
@@ -1057,6 +1321,47 @@
 	</div>
 {/if}
 
+
+{#if konflikt}
+	<div
+		class="fixed inset-0 z-50 grid place-items-center bg-tinte/40 px-4"
+		role="alertdialog"
+		aria-modal="true"
+		aria-labelledby="konflikt-titel"
+		aria-describedby="konflikt-text"
+		use:dialog={{ onschliessen: () => (konflikt = null), gesperrt: busy }}
+	>
+		<div class="grid w-full max-w-sm gap-3 rounded-2xl bg-papier p-5 text-[14px]">
+			<b id="konflikt-titel" class="text-[16px] font-extrabold">
+				{konflikt.code === 'veraltet' ? 'Nicht gespeichert' : 'Der Bon hat sich geändert'}
+			</b>
+			<p id="konflikt-text" class="text-gedaempft">
+				{konflikt.satz}
+				{#if konflikt.code === 'veraltet'}
+					Du kannst deine Fassung trotzdem speichern — sie ersetzt dann, was dort inzwischen steht.
+				{/if}
+			</p>
+			<div class="flex flex-wrap justify-end gap-2">
+				<button
+					type="button"
+					class="rounded-xl border border-linie bg-papier px-4 py-2 text-sm font-bold disabled:opacity-60"
+					disabled={busy}
+					onclick={neuLaden}
+					>{konflikt.code === 'veraltet' ? 'Neu laden (deine Änderungen gehen verloren)' : 'Neu laden'}</button
+				>
+				{#if konflikt.code === 'veraltet'}
+					<button
+						type="button"
+						class="rounded-xl bg-tuerkis px-4 py-2 text-sm font-extrabold text-white disabled:opacity-60"
+						data-autofocus
+						disabled={busy}
+						onclick={meineFassung}>Meine Fassung speichern</button
+					>
+				{/if}
+			</div>
+		</div>
+	</div>
+{/if}
 
 {#if bearbeitung}
 	<!-- Bild bearbeiten (bons/bild.ts): derselbe Bildschirm wie beim Scannen. -->

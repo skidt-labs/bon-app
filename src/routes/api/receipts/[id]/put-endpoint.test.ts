@@ -261,6 +261,27 @@ describe('PUT /api/receipts/[id]', () => {
 		expect(isHttpError(caught, 409)).toBe(true);
 	});
 
+	// 0.12.1: jede 409 steht mit Bon-Kennung und Grund im Protokoll (ohne Bon-Inhalt) —
+	// am 06.11. lehnte ein Bon 22-mal ab, und niemand konnte sehen, warum.
+	it('protokolliert eine verfehlte Korrektur mit Bon und Grund', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mocks.selectResult = [{ id: 'r1', status: 'failed' }];
+		mocks.returningRows.push([{ id: ZEILE_A }], []);
+		await Promise.resolve().then(() => PUT(fakeEvent(rumpf()))).catch(() => {});
+		expect(warn).toHaveBeenCalledWith(
+			'[api/receipts] speichern r1 abgelehnt (409): Der Bon hat sich zwischen Laden und Speichern geändert.'
+		);
+		warn.mockRestore();
+	});
+
+	it('protokolliert eine Statussperre', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mocks.selectResult = [{ id: 'r1', status: 'extracting' }];
+		await Promise.resolve().then(() => PUT(fakeEvent(rumpf()))).catch(() => {});
+		expect(warn.mock.calls.some(([m]) => String(m).startsWith('[api/receipts] speichern r1 abgelehnt (409): '))).toBe(true);
+		warn.mockRestore();
+	});
+
 	it('verweigert einen Bon, der noch gar nicht ausgelesen ist', async () => {
 		mocks.selectResult = [{ id: 'r1', status: 'extracting' }];
 		let caught: unknown;
@@ -309,3 +330,93 @@ describe('PUT /api/receipts/[id]', () => {
 		expect((caught as { body: { message: string } }).body.message).toBe('Dieser Bon wird gerade gelesen.');
 	});
 });
+
+// 0.13.0 (Entwurf 2026-11-06-pruefhilfen, §4b): jede 409 traegt einen Code, damit die Seite
+// den passenden Ausweg zeigt — „Meine Fassung speichern“ oder „Neu laden“.
+describe('PUT: 409-Codes und ueberschreiben', () => {
+	const fang = async (rumpfWert: unknown) => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		let caught: unknown;
+		try {
+			await PUT(fakeEvent(rumpfWert));
+		} catch (err) {
+			caught = err;
+		}
+		warn.mockRestore();
+		return caught as { status: number; body: { message: string; code?: string } };
+	};
+	beforeEach(() => {
+		mocks.returningRows = [];
+	});
+
+	it('Zeilen passen nicht: Code veraltet', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'review' }];
+		mocks.bestand = [bestandZeile(), bestandZeile({ id: ZEILE_B, lineNo: 2 })];
+		const e = await fang(rumpf([zeile()]));
+		expect(e.status).toBe(409);
+		expect(e.body.code).toBe('veraltet');
+	});
+
+	it('Status sperrt: Code status', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'extracting' }];
+		const e = await fang(rumpf());
+		expect(e.status).toBe(409);
+		expect(e.body.code).toBe('status');
+	});
+
+	it('Status hat sich zwischen Laden und Schreiben geaendert: Code status', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'review' }];
+		mocks.bestand = [bestandZeile()];
+		mocks.returningRows.push([{ id: ZEILE_A }], []); // die Position trifft, der Kopf nicht
+		const e = await fang(rumpf());
+		expect(e.status).toBe(409);
+		expect(e.body.code).toBe('status');
+	});
+
+	it('mit ueberschreiben: eine nicht erwaehnte Zeile wird geloescht statt abgelehnt, und es steht im Protokoll', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mocks.selectResult = [{ id: 'r1', status: 'review' }];
+		mocks.bestand = [bestandZeile(), bestandZeile({ id: ZEILE_B, lineNo: 2 })];
+		await PUT(fakeEvent(rumpf([zeile()], { ueberschreiben: true })));
+		expect(mocks.deleteCalls).toHaveLength(1);
+		expect(warn).toHaveBeenCalledWith('[api/receipts] speichern r1 überschrieben (0 neu, 1 gelöscht)');
+		warn.mockRestore();
+	});
+});
+
+// Abschlusspruefung 0.13.0, C1: ein veraltetes Fenster sendet den Status, den es geladen hat.
+// Weicht er ab (anderswo bestaetigt), wird nichts geschrieben — auch nicht mit ueberschreiben.
+describe('PUT: erwarteter Status', () => {
+	beforeEach(() => {
+		mocks.updateCalls = [];
+		mocks.insertCalls = [];
+		mocks.deleteCalls = [];
+		mocks.returningRows = [];
+	});
+	it('weicht der geladene Status ab: 409 status, nichts geschrieben', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		mocks.selectResult = [{ id: 'r1', status: 'confirmed' }];
+		mocks.bestand = [bestandZeile()];
+		let caught: unknown;
+		try {
+			await PUT(fakeEvent(rumpf([zeile()], { erwartet: 'review', ueberschreiben: true })));
+		} catch (err) {
+			caught = err;
+		}
+		warn.mockRestore();
+		const e = caught as { status: number; body: { code?: string } };
+		expect(e.status).toBe(409);
+		expect(e.body.code).toBe('status');
+		expect(mocks.updateCalls).toHaveLength(0);
+		expect(mocks.insertCalls).toHaveLength(0);
+		expect(mocks.deleteCalls).toHaveLength(0);
+	});
+
+	it('passt der geladene Status: wie bisher', async () => {
+		mocks.selectResult = [{ id: 'r1', status: 'review' }];
+		mocks.bestand = [bestandZeile()];
+		await PUT(fakeEvent(rumpf([zeile()], { erwartet: 'review' })));
+		expect(mocks.updateCalls.length).toBeGreaterThan(0);
+	});
+});
+

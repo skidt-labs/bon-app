@@ -10,6 +10,7 @@ import { ExtractionSchemaError, ExtractionHttpError, ExtractionTruncatedError } 
 import { BonUnlesbarError, OcrWerkzeugKaputtError } from '$lib/server/extraction/ocr-text-provider';
 import { checkPlausibility } from '$lib/server/validation/plausibility';
 import { randPreiseAnwenden } from '$lib/server/extraction/randpreise';
+import { mengenzeilenAnwenden } from '$lib/server/extraction/mengenzeilen';
 import { vorzeichenAngleichen } from '$lib/bons/zeilenarten';
 import type { ExtractionProvider, ExtractionUsage } from '$lib/server/extraction';
 import type { ExtractedReceipt } from '$lib/server/extraction/schema';
@@ -226,6 +227,14 @@ export async function handleExtractJobs(
         if (nachgebessert.warnungen.length > 0) {
           result = { ...gelesen, items: nachgebessert.items };
           randWarnungen = nachgebessert.warnungen;
+        }
+        // 0.13.0: Mengenzeilen („2 x 1,09“) stehen mal ueber, mal unter ihrer Ware — die
+        // gehoert, deren Randbetrag Menge × Preis ist (mengenzeilen.ts). Nach den Randpreisen,
+        // damit sie den korrigierten Betrag vergleicht. Mengenprobe 06.11.2026: 0 richtige veraendert.
+        const mengen = mengenzeilenAnwenden(result.items, ocrZeilen);
+        if (mengen.warnungen.length > 0) {
+          result = { ...result, items: mengen.items };
+          randWarnungen = [...randWarnungen, ...mengen.warnungen];
         }
       }
       // Abschlusspruefung 0.12.0: Rabatt und Pfandrueckgabe sind immer negativ — schon hier,

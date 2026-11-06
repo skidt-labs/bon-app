@@ -63,7 +63,20 @@ export const korrekturenSchema = z.object({
 		}))
 	),
 	/** Zeilen, die der Mensch entfernt hat — ihre IDs, damit der Server sie loeschen kann. */
-	geloescht: z.array(z.uuid())
+	geloescht: z.array(z.uuid()),
+	/**
+	 * „Meine Fassung speichern“ nach einer 409 (Entwurf 2026-11-06-pruefhilfen, §4b): die
+	 * Fassung der Seite gilt, auch wenn ihre Zeilen nicht mehr zum Bestand passen. Nur auf
+	 * ausdruecklichen Klick; die Statuspruefung bleibt hart.
+	 */
+	ueberschreiben: z.boolean().default(false),
+	/**
+	 * Der Status, mit dem die Seite den Bon geladen hat (Abschlusspruefung 0.13.0, C1). Weicht
+	 * er ab — etwa anderswo bestaetigt, waehrend dieses Fenster noch „in Pruefung“ zeigt —,
+	 * lehnen beide Endpunkte ab, statt die bestaetigte Fassung zu ueberschreiben. Fehlt er
+	 * (aeltere Seite), wird nicht verglichen.
+	 */
+	erwartet: z.string().max(20).optional()
 });
 
 export type Korrekturen = z.infer<typeof korrekturenSchema>;
@@ -124,7 +137,14 @@ type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
 export type Gelerntes = { rawText: string; categoryId: string };
 
 export class KorrekturVerfehlt extends Error {
-	constructor(grund: string) {
+	/**
+	 * `zeilen`: die gesendeten Zeilen passen nicht zum Bestand — „Meine Fassung speichern“
+	 * hilft. `status`: der Bon hat inzwischen einen anderen Status — da hilft nur Neuladen.
+	 */
+	constructor(
+		grund: string,
+		readonly art: 'zeilen' | 'status' = 'zeilen'
+	) {
 		super(grund);
 		this.name = 'KorrekturVerfehlt';
 	}
@@ -203,6 +223,8 @@ export async function korrekturenAnwenden(
 		ausStatus: (typeof receipts.$inferSelect)['status'];
 		/** Vermutetes Original (originalBeimEintragen). Gesetzt: Doppel-Hinweis statt Bestaetigung. */
 		doppelVon?: string | null;
+		/** Bei `ueberschreiben`: wie viele Zeilen neu angelegt und wie viele geloescht wurden — fuers Protokoll. */
+		beimUeberschreiben?: (z: { neu: number; geloescht: number }) => void;
 	}
 ): Promise<Gelerntes[]> {
 	/**
@@ -230,6 +252,29 @@ export async function korrekturenAnwenden(
 		.from(receiptItems)
 		.where(eq(receiptItems.receiptId, receiptId));
 	const bestandNachId = new Map(bestand.map((z) => [z.id, z]));
+	/**
+	 * Zeilen, die beim Ueberschreiben aus einer veralteten Id neu angelegt werden. Ihre
+	 * Kategorie ist nicht unbedingt von Hand — sie wird weder gelernt noch als „manual“
+	 * gefuehrt (Abschlusspruefung 0.13.0, I6).
+	 */
+	const ausVeraltet = new Set<object>();
+
+	if (k.ueberschreiben) {
+		// Die Fassung der Seite gilt: unbekannte Ids werden neue Zeilen, nicht erwaehnte
+		// Bestandszeilen fallen weg, „geaendert und geloescht“ gilt als geaendert. Der Status
+		// bleibt unten hart geprueft — ein inzwischen bestaetigter Bon wird nie ueberschrieben.
+		const items = k.items.map((i) => {
+			if (i.id === null || bestandNachId.has(i.id)) return i;
+			const neu = { ...i, id: null };
+			ausVeraltet.add(neu);
+			return neu;
+		});
+		const bleibt = new Set(items.flatMap((i) => (i.id === null ? [] : [i.id])));
+		const weg = bestand.filter((z) => !bleibt.has(z.id)).map((z) => z.id);
+		opts.beimUeberschreiben?.({ neu: items.filter((i) => i.id === null).length, geloescht: weg.length });
+		k = { ...k, items, geloescht: weg };
+	}
+
 	const gesendet = new Set(k.items.flatMap((i) => (i.id === null ? [] : [i.id])));
 	const geloescht = new Set(k.geloescht);
 
@@ -273,12 +318,14 @@ export async function korrekturenAnwenden(
 			categoryId: i.categoryId
 		};
 		if (i.id === null) {
-			// Eine von Hand angelegte Zeile traegt ihre Kategorie von Hand.
-			if (i.categoryId !== null) gelernt.push({ rawText: i.rawText, categoryId: i.categoryId });
+			// Eine von Hand angelegte Zeile traegt ihre Kategorie von Hand — eine aus einer
+			// veralteten Id neu angelegte nicht unbedingt (ausVeraltet).
+			const vonHand = i.categoryId !== null && !ausVeraltet.has(i);
+			if (vonHand) gelernt.push({ rawText: i.rawText, categoryId: i.categoryId! });
 			await tx.insert(receiptItems).values({
 				receiptId,
 				...werte,
-				...(i.categoryId !== null ? { categorySource: 'manual' as const } : {}),
+				...(vonHand ? { categorySource: 'manual' as const } : {}),
 				corrected: true
 			});
 			continue;
@@ -372,7 +419,7 @@ export async function korrekturenAnwenden(
 		.where(and(eq(receipts.id, receiptId), eq(receipts.status, opts.ausStatus)))
 		.returning({ id: receipts.id });
 	if (kopfGetroffen.length !== 1) {
-		throw new KorrekturVerfehlt('Der Bon hat sich zwischen Laden und Speichern geändert.');
+		throw new KorrekturVerfehlt('Der Bon hat sich zwischen Laden und Speichern geändert.', 'status');
 	}
 
 	return gelernt;

@@ -11,6 +11,7 @@ import {
 	KorrekturVerfehlt,
 	type Gelerntes
 } from '$lib/server/receipts/korrekturen';
+import { ablehnen, ueberschriebenProtokollieren } from '$lib/server/receipts/ablehnung';
 import type { RequestHandler } from './$types';
 
 /**
@@ -36,13 +37,17 @@ export const PUT: RequestHandler = async ({ params, request, locals }) => {
 	// ging schief, und dann traegt ihn eben ein Mensch ein (27.09.2026). Beim Speichern
 	// wird er zu einem Bon in Pruefung (korrekturenAnwenden).
 	if (receipt.status !== 'review' && receipt.status !== 'confirmed' && receipt.status !== 'failed') {
-		error(409, statusSperrText(receipt.status));
+		ablehnen('speichern', receipt.id, statusSperrText(receipt.status), 'status');
 	}
 
 	const geparst = korrekturenSchema.safeParse(await request.json());
 	if (!geparst.success) error(400, 'Ungültige Korrekturen');
 	const geprueft = pruefeKorrekturen(geparst.data);
 	if (!geprueft.ok) error(400, geprueft.grund);
+	// Die Seite hat den Bon mit einem anderen Status geladen (anderes Fenster): nichts schreiben.
+	if (geparst.data.erwartet !== undefined && geparst.data.erwartet !== receipt.status) {
+		ablehnen('speichern', receipt.id, `geladen als ${geparst.data.erwartet}, jetzt ${receipt.status}`, 'status', statusSperrText(receipt.status));
+	}
 
 	const doppelVon = await originalBeimEintragen(receipt, geparst.data);
 
@@ -57,12 +62,16 @@ export const PUT: RequestHandler = async ({ params, request, locals }) => {
 				// Bestaetigen geteilt.
 				warBestaetigt: receipt.status === 'confirmed',
 				ausStatus: receipt.status,
-				doppelVon
+				doppelVon,
+				beimUeberschreiben: (z) => ueberschriebenProtokollieren('speichern', receipt.id, z)
 			})
 		);
 	} catch (err) {
 		if (err instanceof KorrekturVerfehlt) {
-			error(409, 'Die Korrekturen passen nicht zu diesem Bon. Bitte die Seite neu laden.');
+			// Status geaendert: nur Neuladen hilft. Zeilen passen nicht: die Seite bietet
+			// „Meine Fassung speichern“ an (ueberschreiben, Entwurf 2026-11-06-pruefhilfen, §4b).
+			if (err.art === 'status') ablehnen('speichern', receipt.id, err.message, 'status', 'Dieser Bon hat sich gerade geändert. Bitte die Seite neu laden.');
+			ablehnen('speichern', receipt.id, err.message, 'veraltet', 'Dieser Bon wurde inzwischen anderswo geändert — vielleicht in einem anderen Fenster.');
 		}
 		throw err;
 	}
