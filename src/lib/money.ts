@@ -8,7 +8,13 @@ export function parseAmountToCents(raw: string): number {
   // "MwSt 19%" nach dem Strippen wie "1919" bzw. "19" aussehen und als 19,00 € durchgehen,
   // obwohl es gar kein Betrag ist (Bons enthalten viele ziffernhaltige Nicht-Beträge:
   // Steuersätze, Mengen, Datumsangaben, EAN-Codes).
-  const stripped = raw.replace(/\s|EUR|€/gi, '');
+  //
+  // Zwei Schreibweisen des Minus kommen dazu: das typografische Minus (U+2212, so setzen es
+  // manche Tastaturen und Kopien) und das nachgestellte Minus, wie es auf Bons steht
+  // („0,50-“). Beide werden auf ein vorangestelltes „-“ gebracht; ein zweites Minus bleibt
+  // stehen und laesst die Pruefung unten scheitern.
+  let stripped = raw.replace(/\s|EUR|€/gi, '').replace(/\u2212/g, '-');
+  if (stripped.endsWith('-')) stripped = '-' + stripped.slice(0, -1);
 
   let normalised: string;
   if (GROUPED.test(stripped)) {

@@ -2,6 +2,7 @@
 	import { goto, invalidateAll } from '$app/navigation';
 	import { dialog } from '$lib/client/dialog';
 	import { nachKorbFehler } from './rueckfrage';
+	import { vorzeichenAngleichen } from '$lib/bons/zeilenarten';
 	import { tick } from 'svelte';
 	import { mitWartezustand, nachladenAlle, NACHLADEN_MS } from '$lib/client/warten';
 	import { formatCents } from '$lib/money';
@@ -164,7 +165,7 @@
 		zeilen =
 			data.receipt.status === 'failed' && data.items.length === 0
 				? zeileEinfuegen([], -1)
-				: data.items.map((i) => ({ ...i }));
+				: vorzeichenAngleichen(data.items.map((i) => ({ ...i })));
 		const d = data.receipt.purchasedAt;
 		kopf = {
 			merchantNameRaw: data.receipt.merchantNameRaw,
@@ -698,6 +699,14 @@
 				onclick={() => fragen('bild')}><span class="hidden sm:inline">Bild bearbeiten</span><span class="sm:hidden">Bild</span></button
 			>
 		{/if}
+		{#if !wartet && !imPapierkorb}
+			<a
+				href="/receipts/{data.receipt.id}/vergleich"
+				class="shrink-0 rounded-xl border border-linie bg-papier px-3 py-1.5 text-[13px] font-bold"
+				aria-label="Mit anderem Bon vergleichen"
+				title="Mit anderem Bon vergleichen"><span class="hidden sm:inline">Vergleichen</span><span class="sm:hidden">Vergl.</span></a
+			>
+		{/if}
 		{#if data.darfVerwerfen && !imPapierkorb}
 			<button
 				type="button"
@@ -870,6 +879,15 @@
 							disabled={busy}
 							onclick={() => doppelEntscheiden('eigenerEinkauf')}>Eigener Einkauf</button
 						>
+						<!-- Beide nebeneinander sehen und waehlen, welcher bleibt (Doppel vergleichen, 0.12.0).
+						     Nicht, wenn das Original im Papierkorb liegt oder nicht sichtbar ist — die
+						     Gegenueberstellung saehe dann nur einen Satz. -->
+						{#if data.original && !originalImPapierkorb}
+							<a
+								href="/receipts/{data.receipt.id}/vergleich/{data.original.id}"
+								class="rounded-xl border border-linie bg-papier px-3.5 py-2 text-sm font-bold">Vergleichen</a
+							>
+						{/if}
 					</div>
 				</div>
 			{/if}

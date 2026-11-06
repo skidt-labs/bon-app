@@ -29,6 +29,19 @@ export type LineType = (typeof ZEILENARTEN)[number];
 /** Zeilenarten, die zur Bonsumme beitragen. `loyalty` und `info` tun das nicht. */
 export const MONETAER: readonly LineType[] = ['article', 'deposit', 'deposit_return', 'discount'];
 
+/**
+ * Zeilenarten, deren Betrag immer negativ ist. Die Ziffern-Tastatur am iPhone hat kein
+ * Minus — wer bei einem Rabatt „1,50“ tippt, meint −1,50. Das Auslesen liefert sie ohnehin
+ * negativ; hier steht die Regel fuer Hand-Eingabe, Server und Nachbesserung im Worker.
+ */
+export const IMMER_NEGATIV: readonly LineType[] = ['discount', 'deposit_return'];
+
+/** Bei Rabatt und Pfandrueckgabe `-|cents|`, sonst unveraendert. 0 bleibt 0 (nicht -0). */
+export function mitVorzeichen(lineType: LineType, cents: number): number {
+	if (!IMMER_NEGATIV.includes(lineType) || cents === 0) return cents;
+	return -Math.abs(cents);
+}
+
 export const ART_TEXT: Record<LineType, string> = {
 	article: 'Artikel',
 	deposit: 'Pfand',
@@ -37,3 +50,18 @@ export const ART_TEXT: Record<LineType, string> = {
 	loyalty: 'Treue',
 	info: 'Info'
 };
+
+/**
+ * `mitVorzeichen` fuer eine ganze Zeilenliste — Gesamt- und Einzelpreis. Angewandt, wo Zeilen
+ * herkommen (Worker nach dem Lesen, Entwurf in der Pruefansicht), damit die Ansicht zeigt, was
+ * gespeichert wird; der Server gleicht beim Speichern zusaetzlich an (Abschlusspruefung 0.12.0).
+ */
+export function vorzeichenAngleichen<T extends { lineType: LineType; totalPriceCents: number; unitPriceCents: number | null }>(
+	zeilen: T[]
+): T[] {
+	return zeilen.map((z) => ({
+		...z,
+		totalPriceCents: mitVorzeichen(z.lineType, z.totalPriceCents),
+		unitPriceCents: z.unitPriceCents === null ? null : mitVorzeichen(z.lineType, z.unitPriceCents)
+	}));
+}

@@ -11,6 +11,7 @@ import {
 	selberBon,
 	type EditorZeile
 } from './editor';
+import { mitVorzeichen } from '$lib/bons/zeilenarten';
 
 const z = (over: Partial<EditorZeile> = {}): EditorZeile => ({
 	id: 'id-' + (over.lineNo ?? 1),
@@ -96,6 +97,15 @@ describe('positionssumme', () => {
 			z({ lineNo: 4, lineType: 'info', totalPriceCents: 9999 })
 		];
 		expect(positionssumme(zeilen)).toBe(84);
+	});
+
+	// Getippte 1,50 bei einem Rabatt werden -1,50 — der Rabatt mindert die Summe.
+	it('zieht einen positiv getippten Rabatt ab', () => {
+		const zeilen = [
+			z({ lineNo: 1, totalPriceCents: 500 }),
+			z({ lineNo: 2, lineType: 'discount', totalPriceCents: mitVorzeichen('discount', 150) })
+		];
+		expect(positionssumme(zeilen)).toBe(350);
 	});
 });
 

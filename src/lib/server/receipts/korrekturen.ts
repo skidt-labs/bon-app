@@ -2,7 +2,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { db } from '$lib/server/db';
 import { receipts, receiptItems } from '$lib/server/db/schema';
-import { ZEILENARTEN } from '$lib/bons/zeilenarten';
+import { ZEILENARTEN, mitVorzeichen } from '$lib/bons/zeilenarten';
 import { haendlerAufloesen } from '$lib/server/merchants';
 import { lerneAusKorrektur } from '$lib/server/kategorien/lernen';
 import { parseBonZeit } from '$lib/server/zeit';
@@ -50,6 +50,17 @@ export const korrekturenSchema = z.object({
 			appliesToLine: z.int().min(1).max(999).nullable(),
 			categoryId: z.uuid().nullable()
 		})
+		/**
+		 * Rabatt und Pfandrueckgabe sind immer negativ — der Server erzwingt das, auch wenn
+		 * ein Client (oder die iPhone-Tastatur ohne Minus) einen positiven Betrag schickt.
+		 * Hier im Vertrag, damit beide Endpunkte, der Vergleich mit dem Bestand
+		 * (`hatSichGeaendert`) und das Schreiben dieselben Werte sehen.
+		 */
+		.transform((i) => ({
+			...i,
+			totalPriceCents: mitVorzeichen(i.lineType, i.totalPriceCents),
+			unitPriceCents: i.unitPriceCents === null ? null : mitVorzeichen(i.lineType, i.unitPriceCents)
+		}))
 	),
 	/** Zeilen, die der Mensch entfernt hat — ihre IDs, damit der Server sie loeschen kann. */
 	geloescht: z.array(z.uuid())

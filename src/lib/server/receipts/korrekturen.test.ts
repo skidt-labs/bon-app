@@ -57,6 +57,30 @@ describe('korrekturenSchema', () => {
 	});
 });
 
+describe('Vorzeichen bei Rabatt und Pfandrueckgabe', () => {
+	// Die Ziffern-Tastatur am iPhone hat kein Minus: der Server erzwingt das Vorzeichen.
+	it('speichert einen positiv geschickten Rabatt negativ', () => {
+		const k = korrekturenSchema.parse(
+			rumpf({ items: [zeile({ lineType: 'discount', totalPriceCents: 150, unitPriceCents: 150 })] })
+		);
+		expect(k.items[0].totalPriceCents).toBe(-150);
+		expect(k.items[0].unitPriceCents).toBe(-150);
+	});
+
+	it('macht eine Pfandrueckgabe negativ, laesst den Einzelpreis null', () => {
+		const k = korrekturenSchema.parse(
+			rumpf({ items: [zeile({ lineType: 'deposit_return', totalPriceCents: 25, unitPriceCents: null })] })
+		);
+		expect(k.items[0].totalPriceCents).toBe(-25);
+		expect(k.items[0].unitPriceCents).toBeNull();
+	});
+
+	it('laesst Artikel unveraendert, auch negative', () => {
+		const k = korrekturenSchema.parse(rumpf({ items: [zeile({ totalPriceCents: -99, unitPriceCents: -99 })] }));
+		expect(k.items[0].totalPriceCents).toBe(-99);
+	});
+});
+
 describe('pruefeKorrekturen', () => {
 	it('laesst einen sauberen Bon durch', () => {
 		expect(pruefeKorrekturen(korrekturenSchema.parse(rumpf()))).toEqual({ ok: true });

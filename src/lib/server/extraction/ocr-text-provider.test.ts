@@ -177,6 +177,8 @@ describe('createOcrTextProvider', () => {
     // Der Zusatz muss tatsächlich mitgeschickt werden — sonst testet dieser Fall
     // nichts anderes als den Bildweg mit vertauschtem Inhalt.
     expect(systemMessage.content).toContain('DIESER TEXT STAMMT AUS EINER TEXTERKENNUNG');
+    // 0.12.0: die Randpreis-Regel geht als eigener Zusatz mit.
+    expect(systemMessage.content).toContain('WELCHER BETRAG DER PREIS IST');
     expect(receipt.items).toHaveLength(2);
     expect(receipt.items[0].rawText).toBe('Milch');
   });

@@ -29,6 +29,10 @@
 		<path d="M3.5 10.5 12 4l8.5 6.5V20H3.5z" /><path d="M9.5 20v-6h5v6" />
 	{:else if name === 'kamera'}
 		<path d="M4 8h3l2-3h6l2 3h3v11H4z" /><circle cx="12" cy="13" r="3.5" />
+	{:else if name === 'datei'}
+		<!-- Blatt mit Eselsohr und Pfeil nach oben: „Datei hochladen". Ohne Textzeilen,
+		     damit es sich vom Bon-Symbol (beleg) unterscheidet. -->
+		<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" /><path d="M14 3v5h5" /><path d="M12 18v-6.5M9.5 14 12 11.5l2.5 2.5" />
 	{:else if name === 'ablage'}
 		<path d="M3 13h5l2 3h4l2-3h5" /><path d="M5.5 5h13l2.5 8v6H3v-6z" />
 	{:else if name === 'beleg'}

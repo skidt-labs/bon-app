@@ -1,4 +1,4 @@
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import sharp from 'sharp';
@@ -73,6 +73,11 @@ export async function loescheBilder(pfade: string[]): Promise<void> {
 
 export function receiptPathFor(relative: string): string {
 	return join(baseDir(), relative);
+}
+
+/** Die gespeicherte Bilddatei eines Bons — fuer „Nur das Bild uebernehmen" (bons/bild.ts). */
+export async function leseBild(relativ: string): Promise<Buffer> {
+	return readFile(receiptPathFor(relativ));
 }
 
 export async function storeReceiptImage(

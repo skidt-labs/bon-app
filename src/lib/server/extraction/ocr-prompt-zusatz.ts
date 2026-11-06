@@ -87,3 +87,22 @@ export const OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR = `PFANDRÜCKGABE MIT EIGENER MEN
   beim Kauf). Leite niemals aus einer Pfand-RÜCKGABE (negativer Betrag) eine
   gespiegelte, positive "deposit"-Zeile ab — eine Rückgabe bleibt eine einzige Zeile
   mit negativem Betrag ("deposit_return").`;
+
+/**
+ * Seit 0.12.0 (06.11.2026): welcher Betrag der Preis einer Position ist. Anlass: von 33
+ * Preis-Korrekturen an bestaetigten Bons hatte das Modell 17-mal den Randbetrag einer
+ * Nachbarzeile und 3-mal eine Zahl aus der Zeilenmitte genommen. Eigene Konstante (wie der
+ * Pfand-Zusatz), damit `OCR_PROMPT_ZUSATZ` der gemessene Wortlaut bleibt. Die Wirkung auf
+ * das Modell ist NICHT gemessen; die greifende Absicherung ist die Nachbesserung im Worker
+ * (`randpreise.ts`). Bewusst KEIN pauschales „nie aus einer Nachbarzeile": steht unter einem
+ * Artikel seine eigene Mengen- oder Gewichtszeile, ist ihr rechter Betrag sein Preis
+ * (Abschlusspruefung 0.12.0, Wichtig 3).
+ */
+export const OCR_PROMPT_ZUSATZ_RANDPREIS = `WELCHER BETRAG DER PREIS IST
+- Der Preis einer Position ist der Betrag ganz rechts in ihrer Zeile. Ein
+  Steuerkennzeichen (A, B) dahinter gehört nicht dazu.
+- Zahlen in der Mitte der Zeile — Menge × Einzelpreis, Gewicht, Preis je kg — sind
+  keine Positionspreise.
+- Steht unter einem Artikel seine eigene Mengen- oder Gewichtszeile (z. B.
+  "0,756 kg x 1,19 EUR/kg   0,90"), ist der Betrag ganz rechts dort sein Preis.
+- Nimm nie den Preis eines ANDEREN Artikels.`;

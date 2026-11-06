@@ -8,7 +8,7 @@ import { extractedReceiptSchema, bonResponseJsonSchema } from './schema';
 import type { ExtractedReceipt } from './schema';
 import type { AuftragsFrist } from '../queue/fristen';
 import { SYSTEM_PROMPT } from './prompt';
-import { OCR_PROMPT_ZUSATZ, OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR } from './ocr-prompt-zusatz';
+import { OCR_PROMPT_ZUSATZ, OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR, OCR_PROMPT_ZUSATZ_RANDPREIS } from './ocr-prompt-zusatz';
 import { stripCodeFence, redactSecret, parseUsage, STANDARD_ZEITLIMIT_MS } from './openai-compat';
 import type { ExtractionProvider, ExtractionResult } from './types';
 
@@ -261,7 +261,7 @@ export async function frageTextModell(
       messages: [
         {
           role: 'system',
-          content: `${SYSTEM_PROMPT}\n\n${OCR_PROMPT_ZUSATZ}\n\n${OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR}`
+          content: `${SYSTEM_PROMPT}\n\n${OCR_PROMPT_ZUSATZ}\n\n${OCR_PROMPT_ZUSATZ_PFAND_KORREKTUR}\n\n${OCR_PROMPT_ZUSATZ_RANDPREIS}`
         },
         {
           role: 'user',

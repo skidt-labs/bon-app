@@ -1,8 +1,15 @@
 /**
- * Der Startbestand aus dem Entwurf. Diese Liste ist die EINZIGE Quelle: die Migration
- * wird aus ihr erzeugt, und der Prompt fuer die Modell-Stufe ebenfalls. Zwei getrennte
- * Listen wuerden auseinanderlaufen, und das Modell duerfte dann Kategorien vorschlagen,
- * die es in der Datenbank nicht gibt.
+ * Der Kategoriebaum. Diese Liste ist die EINZIGE Quelle: die Migrationen werden aus ihr
+ * erzeugt (0011 Startbestand, 0035 Umbau 0.12.0), und der Prompt fuer die Modell-Stufe
+ * ebenfalls. Zwei getrennte Listen wuerden auseinanderlaufen, und das Modell duerfte dann
+ * Kategorien vorschlagen, die es in der Datenbank nicht gibt.
+ *
+ * Stand 0.12.0 (Nutzer 06.11.2026): Lebensmittel, Suesses, Snacks, Hygiene, Baby,
+ * Medikamente, Mobilitaet, Baumarkt, Garten, Kleidung, Technik — dazu Freizeit, Tier und
+ * Sonstiges. Beim Umbau blieben Ids und Slugs der Unterkategorien gleich, nur Eltern und
+ * Namen aenderten sich: deshalb passt das Praefix eines Slugs nicht immer zur Oberkategorie
+ * (`getraenke-wasser` liegt unter Lebensmittel, `drogerie` heisst „Hygiene“). Ein Slug wird
+ * nie umbenannt — er ist der stabile Schluessel der Migrationen.
  */
 export const KATEGORIEBAUM = [
 	{
@@ -18,15 +25,7 @@ export const KATEGORIEBAUM = [
 			{ slug: 'lebensmittel-konserven-vorrat', name: 'Konserven & Vorrat' },
 			{ slug: 'lebensmittel-grundnahrung', name: 'Grundnahrungsmittel' },
 			{ slug: 'lebensmittel-gewuerze-saucen', name: 'Gewürze & Saucen' },
-			{ slug: 'lebensmittel-suesswaren-snacks', name: 'Süßwaren & Snacks' },
 			{ slug: 'lebensmittel-kaffee-tee', name: 'Kaffee & Tee' },
-			{ slug: 'lebensmittel-babynahrung', name: 'Babynahrung' }
-		]
-	},
-	{
-		slug: 'getraenke',
-		name: 'Getränke',
-		kinder: [
 			{ slug: 'getraenke-wasser', name: 'Wasser' },
 			{ slug: 'getraenke-saefte', name: 'Säfte' },
 			{ slug: 'getraenke-limonaden', name: 'Limonaden' },
@@ -35,40 +34,63 @@ export const KATEGORIEBAUM = [
 		]
 	},
 	{
+		slug: 'suesses',
+		name: 'Süßes',
+		kinder: [{ slug: 'suesses-suessigkeiten', name: 'Süßigkeiten' }]
+	},
+	{
+		slug: 'snacks',
+		name: 'Snacks',
+		kinder: [{ slug: 'snacks-knabberzeug', name: 'Knabberzeug' }]
+	},
+	{
 		slug: 'drogerie',
-		name: 'Drogerie',
+		name: 'Hygiene',
 		kinder: [
 			{ slug: 'drogerie-koerperpflege', name: 'Körperpflege' },
 			{ slug: 'drogerie-haarpflege', name: 'Haarpflege' },
 			{ slug: 'drogerie-zahnpflege', name: 'Zahnpflege' },
-			{ slug: 'drogerie-hygiene', name: 'Hygiene' },
+			{ slug: 'drogerie-hygiene', name: 'Hygieneartikel' },
 			{ slug: 'drogerie-kosmetik', name: 'Kosmetik' },
-			{ slug: 'drogerie-gesundheit-apotheke', name: 'Gesundheit & Apotheke' }
-		]
-	},
-	{
-		slug: 'haushalt',
-		name: 'Haushalt',
-		kinder: [
 			{ slug: 'haushalt-reinigung', name: 'Reinigung' },
 			{ slug: 'haushalt-waesche', name: 'Wäsche' },
-			{ slug: 'haushalt-kuechenbedarf', name: 'Küchenbedarf' },
 			{ slug: 'haushalt-papierwaren', name: 'Papierwaren' }
 		]
 	},
 	{
-		slug: 'tier',
-		name: 'Tier',
+		slug: 'baby',
+		name: 'Baby',
 		kinder: [
-			{ slug: 'tier-futter', name: 'Futter' },
-			{ slug: 'tier-zubehoer', name: 'Zubehör' }
+			{ slug: 'lebensmittel-babynahrung', name: 'Babynahrung' },
+			{ slug: 'baby-pflege', name: 'Babypflege' }
 		]
 	},
-	{ slug: 'garten-pflanzen', name: 'Garten & Pflanzen', kinder: [] },
-	{ slug: 'kleidung-schuhe', name: 'Kleidung & Schuhe', kinder: [] },
-	{ slug: 'elektronik-technik', name: 'Elektronik & Technik', kinder: [] },
-	{ slug: 'baumarkt-werkzeug', name: 'Baumarkt & Werkzeug', kinder: [] },
-	{ slug: 'buero-schreibwaren', name: 'Büro & Schreibwaren', kinder: [] },
+	{
+		slug: 'medikamente',
+		name: 'Medikamente',
+		kinder: [{ slug: 'drogerie-gesundheit-apotheke', name: 'Gesundheit & Apotheke' }]
+	},
+	{
+		slug: 'mobilitaet',
+		name: 'Mobilität',
+		kinder: [
+			{ slug: 'mobilitaet-kraftstoff', name: 'Kraftstoff' },
+			{ slug: 'mobilitaet-oepnv', name: 'ÖPNV' },
+			{ slug: 'mobilitaet-parken', name: 'Parken' }
+		]
+	},
+	{
+		slug: 'baumarkt-werkzeug',
+		name: 'Baumarkt',
+		kinder: [{ slug: 'haushalt-kuechenbedarf', name: 'Küchenbedarf' }]
+	},
+	{ slug: 'garten-pflanzen', name: 'Garten', kinder: [] },
+	{ slug: 'kleidung-schuhe', name: 'Kleidung', kinder: [] },
+	{
+		slug: 'elektronik-technik',
+		name: 'Technik',
+		kinder: [{ slug: 'buero-schreibwaren', name: 'Büro & Schreibwaren' }]
+	},
 	{
 		slug: 'freizeit',
 		name: 'Freizeit',
@@ -79,12 +101,11 @@ export const KATEGORIEBAUM = [
 		]
 	},
 	{
-		slug: 'mobilitaet',
-		name: 'Mobilität',
+		slug: 'tier',
+		name: 'Tier',
 		kinder: [
-			{ slug: 'mobilitaet-kraftstoff', name: 'Kraftstoff' },
-			{ slug: 'mobilitaet-oepnv', name: 'ÖPNV' },
-			{ slug: 'mobilitaet-parken', name: 'Parken' }
+			{ slug: 'tier-futter', name: 'Futter' },
+			{ slug: 'tier-zubehoer', name: 'Zubehör' }
 		]
 	},
 	{
@@ -97,6 +118,14 @@ export const KATEGORIEBAUM = [
 		]
 	}
 ] as const;
+
+/**
+ * Mit 0.12.0 entfallen (leer bzw. aufgeteilt). Migration 0035 haengt ihre Positionen auf
+ * Unsortiert und loescht sie. Hier benannt, damit Tests pruefen koennen, dass keiner davon
+ * zurueck in den Baum wandert — 0011 legt sie bei einem erneuten Lauf wieder an, 0035 raeumt
+ * sie danach wieder weg.
+ */
+export const ENTFALLENE_SLUGS = ['getraenke', 'haushalt', 'lebensmittel-suesswaren-snacks'] as const;
 
 /** Der Rueckfall der Kaskade. Bewusst eine echte Kategorie und kein null. */
 export const SONSTIGES_UNSORTIERT_SLUG = 'sonstiges-unsortiert';

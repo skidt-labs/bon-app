@@ -9,6 +9,8 @@ import { parseBonZeit } from '$lib/server/zeit';
 import { ExtractionSchemaError, ExtractionHttpError, ExtractionTruncatedError } from '$lib/server/extraction/types';
 import { BonUnlesbarError, OcrWerkzeugKaputtError } from '$lib/server/extraction/ocr-text-provider';
 import { checkPlausibility } from '$lib/server/validation/plausibility';
+import { randPreiseAnwenden } from '$lib/server/extraction/randpreise';
+import { vorzeichenAngleichen } from '$lib/bons/zeilenarten';
 import type { ExtractionProvider, ExtractionUsage } from '$lib/server/extraction';
 import type { ExtractedReceipt } from '$lib/server/extraction/schema';
 import { KiKonfigurationFehler } from '$lib/server/ki/fehler';
@@ -208,16 +210,32 @@ export async function handleExtractJobs(
         continue;
       }
       const ohneVorpruefung = job.data.ohneVorpruefung === true;
-      const { receipt: result, usage, raw, servedModel, warnings, ocrText, ocr, ocrZeilen } = await deps.provider.extract(
+      const { receipt: gelesen, usage, raw, servedModel, warnings, ocrText, ocr, ocrZeilen } = await deps.provider.extract(
         image,
         signal,
         { ohneVorpruefung, frist }
       );
+      // 0.12.0: Preise vom rechten Rand der eigenen Zeile (randpreise.ts). Steht ein
+      // Modell-Preis nirgends oder nur in der Zeilenmitte, gilt der Randbetrag der Reihe,
+      // deren Text zum Artikel passt. HIER und nicht erst in saveResult: die Summenprobe
+      // unten und die Zuordnung zu den OCR-Zeilen sollen den korrigierten Preis sehen.
+      let result = gelesen;
+      let randWarnungen: string[] = [];
+      if (ocrZeilen?.some((z) => z.box)) {
+        const nachgebessert = randPreiseAnwenden(gelesen.items, ocrZeilen);
+        if (nachgebessert.warnungen.length > 0) {
+          result = { ...gelesen, items: nachgebessert.items };
+          randWarnungen = nachgebessert.warnungen;
+        }
+      }
+      // Abschlusspruefung 0.12.0: Rabatt und Pfandrueckgabe sind immer negativ — schon hier,
+      // damit Summenprobe und Pruefansicht sehen, was gespeichert wird.
+      result = { ...result, items: vorzeichenAngleichen(result.items) };
       // Aufgabenstellung Punkt 3: `warnings` (Entwurf E7, Aufgabe 2) war bisher nur
       // Transportweg — niemand sah sie. `needsReviewReason` ist der bestehende,
       // tatsächlich sichtbare Weg (Review-Ansicht, Posteingang); checkPlausibility
       // deckt Punkt 5 (fehlende Endsumme) bereits selbst über 'missing_total' ab.
-      const problems = [...checkPlausibility(result, deps.now()), ...warnings];
+      const problems = [...checkPlausibility(result, deps.now()), ...warnings, ...randWarnungen];
       // Kein Kassenbon? Nur beim Textweg (der Bildweg hat keinen OCR-Text) und nicht, wenn
       // ein Mensch schon „Doch ein Bon" gesagt hat (Entwurf 2026-09-27-kein-bon).
       const keinBon = ocrText !== null && !ohneVorpruefung ? keinKassenbon(ocrText) : null;

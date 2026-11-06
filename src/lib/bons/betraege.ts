@@ -13,6 +13,8 @@
  * bestehende Importe und Tests unveraendert bleiben.
  */
 
+import { randBetrag, reiheVon, type Kasten } from './reihen';
+
 /**
  * Deutsches Geldformat, tolerant gegenüber OCR-Leerraum um das Trennzeichen
  * ("84 ,00") und gegenüber einem Punkt statt Komma.
@@ -82,17 +84,25 @@ function alsCent(text: string): number | null {
  * allein beherrschen. Deshalb hier ausgeschlossen.
  */
 export function betraegeInCent(text: string): number[] {
+  return betraegeMitStelle(text).map((b) => b.cent);
+}
+
+/**
+ * Wie `betraegeInCent`, aber mit der Stelle im Text — `reihen.ts` braucht sie, um ein
+ * Minus direkt vor oder hinter dem Betrag zu sehen („0,25-“ auf dem Bon).
+ */
+export function betraegeMitStelle(text: string): { cent: number; start: number; ende: number }[] {
   const datumsStellen: Array<[number, number]> = [];
   for (const m of text.matchAll(new RegExp(DATUM_REGEX.source, 'g'))) {
     if (m.index !== undefined) datumsStellen.push([m.index, m.index + m[0].length]);
   }
-  const werte: number[] = [];
+  const werte: { cent: number; start: number; ende: number }[] = [];
   for (const m of text.matchAll(BETRAG_REGEX)) {
     if (m.index === undefined) continue;
     const ende = m.index + m[0].length;
     if (datumsStellen.some(([a, b]) => a <= m.index! && ende <= b)) continue;
     const c = alsCent(m[0]);
-    if (c !== null && c > 0) werte.push(c);
+    if (c !== null && c > 0) werte.push({ cent: c, start: m.index, ende });
   }
   return werte;
 }
@@ -109,21 +119,35 @@ export function buchstaben(text: string): string {
 		.replace(/[^A-Z]/g, '');
 }
 
+/**
+ * Der Betrag, der im Bild steht, wenn er vom gelesenen abweicht — sonst null. Immer ohne
+ * Vorzeichen.
+ *
+ * Tragen die Kaesten Rahmen (0.12.0), zaehlt der Randbetrag der REIHE: ein PaddleOCR-
+ * Kasten ist nicht die Bon-Zeile, der Preis steht im Kasten daneben (`reihen.ts`).
+ * Gemessen an den bestaetigten Bons (06.11.2026): alle von Hand eingetragenen Preise
+ * stehen am rechten Rand ihrer Zeile. Hat die Reihe keinen Randbetrag, gilt die alte
+ * Regel (eigener Kasten, sonst der naechste, wenn er nur Zahlen traegt).
+ */
 export function abweichungInZeile(
-	zeilen: { text: string }[],
+	zeilen: Kasten[],
 	index: number,
 	totalPriceCents: number,
 	unitPriceCents: number | null
 ): number | null {
 	const zeile = zeilen[index];
 	if (!zeile) return null;
+	const soll = Math.abs(totalPriceCents);
+	if (zeile.box) {
+		const rand = randBetrag(zeilen, reiheVon(zeilen, index));
+		if (rand !== null) return Math.abs(rand) === soll ? null : Math.abs(rand);
+	}
 	let betraege = betraegeInCent(zeile.text);
 	if (betraege.length === 0) {
 		const naechste = zeilen[index + 1];
 		if (!naechste || buchstaben(naechste.text).length > 0) return null;
 		betraege = betraegeInCent(naechste.text);
 	}
-	const soll = Math.abs(totalPriceCents);
 	if (betraege.includes(soll)) return null;
 	const ohneEinzelpreis =
 		unitPriceCents !== null ? betraege.filter((b) => b !== Math.abs(unitPriceCents)) : betraege;

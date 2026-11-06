@@ -14,7 +14,7 @@ vi.mock('$lib/server/bons/liste', () => ({
 	bonAlsFehlgeschlagenMarkieren: mocks.fehlgeschlagen
 }));
 vi.mock('$lib/server/queue/boss', () => ({ enqueueExtraction: vi.fn(async () => {}) }));
-vi.mock('$lib/server/storage/images', () => ({ storeReceiptImage: vi.fn(), loescheBilder: vi.fn(async () => {}), istSystemfehler: () => false }));
+vi.mock('$lib/server/storage/images', () => ({ storeReceiptImage: vi.fn(), loescheBilder: vi.fn(async () => {}), istSystemfehler: () => false, leseBild: vi.fn() }));
 
 import { PgDialect } from 'drizzle-orm/pg-core';
 import type { SQL } from 'drizzle-orm';

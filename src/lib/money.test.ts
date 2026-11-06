@@ -43,6 +43,16 @@ describe('parseAmountToCents', () => {
   it('liest Punkt-Dezimalschreibweise', () => {
     expect(parseAmountToCents('12.34')).toBe(1234);
   });
+  it('liest das typografische Minus (U+2212)', () => {
+    expect(parseAmountToCents('\u22121,50')).toBe(-150);
+  });
+  it('liest ein nachgestelltes Minus wie auf dem Bon', () => {
+    expect(parseAmountToCents('1,50-')).toBe(-150);
+  });
+  it('wirft bei doppeltem Minus', () => {
+    expect(() => parseAmountToCents('1,50--')).toThrow();
+    expect(() => parseAmountToCents('-1,50-')).toThrow();
+  });
 });
 
 describe('formatCents', () => {

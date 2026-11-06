@@ -229,6 +229,40 @@ describe('handleExtractJobs', () => {
     expect(d.saveResult.mock.calls[0][0].ocrZeilen).toEqual(zeilen);
   });
 
+  // 0.12.0: steht der Modell-Preis nirgends im Bild, kommt der Randbetrag der passenden
+  // Reihe — VOR der Plausibilitaet, damit die Summenprobe den korrigierten Preis sieht.
+  it('ersetzt einen Preis, der nirgends steht, durch den Randbetrag seiner Reihe', async () => {
+    const box = (x: number, y: number, w = 60) => [x, y, w, 20] as [number, number, number, number];
+    const zeilen = [
+      { text: 'MILCH', box: box(10, 100, 100), confidence: 90 },
+      { text: '1,09', box: box(400, 101), confidence: 90 },
+      { text: 'A', box: box(460, 100, 15), confidence: 90 }
+    ];
+    const verrutscht = { ...extracted, items: [{ ...extracted.items[0], unitPriceCents: null, totalPriceCents: 179 }] };
+    const d = deps({
+      provider: {
+        id: 'test', model: 'test-1',
+        extract: vi.fn(async () => extraktionsErgebnis(verrutscht, { ocrZeilen: zeilen }))
+      }
+    });
+    await handleExtractJobs([job('r1')] as never, d as never);
+    const args = d.saveResult.mock.calls[0][0];
+    expect(args.result.items[0].totalPriceCents).toBe(109);
+    expect(args.problems).not.toContain('sum_mismatch');
+    expect(args.problems.some((p) => p.includes('Preis von 1,79 auf 1,09 korrigiert'))).toBe(true);
+  });
+
+  // Abschlusspruefung 0.12.0, Wichtig 2: eine positiv gelesene Pfandrueckgabe kommt schon
+  // negativ in die Summenprobe und die Ansicht — nicht erst still beim Speichern.
+  it('gleicht das Vorzeichen von Rabatt und Pfandrueckgabe vor der Summenprobe an', async () => {
+    const positiv = { ...extracted, items: [{ ...extracted.items[0], lineType: 'deposit_return' as const, unitPriceCents: 25, totalPriceCents: 25 }] };
+    const d = deps({ provider: { id: 'test', model: 'test-1', extract: vi.fn(async () => extraktionsErgebnis(positiv)) } });
+    await handleExtractJobs([job('r1')] as never, d as never);
+    const args = d.saveResult.mock.calls[0][0];
+    expect(args.result.items[0].totalPriceCents).toBe(-25);
+    expect(args.result.items[0].unitPriceCents).toBe(-25);
+  });
+
   it('reicht die Zeilen eines unlesbaren Bons an markFailed weiter', async () => {
     const zeilen = [{ text: 'L$DL', box: [0, 0, 10, 10] as [number, number, number, number], confidence: 12 }];
     const fehler = new BonUnlesbarError(

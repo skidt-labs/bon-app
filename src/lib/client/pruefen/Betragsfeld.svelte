@@ -6,6 +6,7 @@
 		ungueltig = $bindable(false),
 		onungueltig,
 		leerErlaubt = false,
+		negativ = false,
 		ariaLabel,
 		class: klasse = ''
 	}: {
@@ -22,6 +23,11 @@
 		onungueltig?: (ungueltig: boolean) => void;
 		/** Darf das Feld leer bleiben? Dann heisst leer `null` — eine Leerstelle, keine Null. */
 		leerErlaubt?: boolean;
+		/**
+		 * Der Betrag ist immer negativ (Rabatt, Pfandrueckgabe): getippte 1,50 werden −1,50.
+		 * Die Ziffern-Tastatur am iPhone hat kein Minus.
+		 */
+		negativ?: boolean;
 		ariaLabel: string;
 		class?: string;
 	} = $props();
@@ -39,7 +45,8 @@
 
 	function lesbar(roh: string): number | null {
 		try {
-			return parseAmountToCents(roh);
+			const wert = parseAmountToCents(roh);
+			return negativ ? -Math.abs(wert) || 0 : wert;
 		} catch {
 			return null;
 		}

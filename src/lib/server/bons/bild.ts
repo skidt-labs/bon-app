@@ -10,13 +10,16 @@
  * nichts oder scheitert die Datenbank, werden die gerade gespeicherten Dateien wieder geloescht —
  * sonst blieben sie verwaist liegen (Sammelfassung 4.1).
  */
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 import type { db as Db } from '$lib/server/db';
-import { receipts, receiptItems } from '$lib/server/db/schema';
+import { receipts, receiptItems, extractionRuns } from '$lib/server/db/schema';
 import { bonLaden, bonAlsFehlgeschlagenMarkieren } from '$lib/server/bons/liste';
+import { inPapierkorbLegen } from '$lib/server/bons/papierkorb';
+import { NICHT_BERECHTIGT, passtErwartung, pruefePaar, vergleichLaden, type Erwartet, type VergleichFehler } from '$lib/server/bons/vergleich';
 import { darfBonVerwerfen, type Zugriffskontext } from '$lib/server/zugriff/kontext';
 import { enqueueExtraction } from '$lib/server/queue/boss';
-import { storeReceiptImage, loescheBilder, istSystemfehler } from '$lib/server/storage/images';
+import { ordneZeilenZu } from '$lib/server/ocr/zuordnung';
+import { storeReceiptImage, loescheBilder, istSystemfehler, leseBild } from '$lib/server/storage/images';
 
 type Verbindung = typeof Db;
 export type BildErgebnis = { ok: true } | { ok: false; status: 403 | 404 | 409; meldung: string };
@@ -27,7 +30,7 @@ export type BildDeps = {
 };
 
 const STANDARD: BildDeps = { speichern: storeReceiptImage, loeschen: loescheBilder, einreihen: enqueueExtraction };
-const GEAENDERT: BildErgebnis = { ok: false, status: 409, meldung: 'Der Bon hat sich gerade geändert. Bitte die Seite neu laden.' };
+const GEAENDERT: { ok: false; status: 409; meldung: string } = { ok: false, status: 409, meldung: 'Der Bon hat sich gerade geändert. Bitte die Seite neu laden.' };
 
 /** Das Bild liess sich nicht speichern — `systemfehler`: Platte/Rechte (503), sonst unlesbar (422). */
 export class BildSpeicherFehler extends Error {
@@ -151,5 +154,119 @@ export async function originalWiederherstellen(
 	if (!getroffen) return GEAENDERT;
 	await deps.loeschen([bon.imagePath, bon.thumbPath]);
 	await einreihen(d, bon.id, deps);
+	return { ok: true };
+}
+
+export type BildUebernehmenDeps = Pick<BildDeps, 'speichern' | 'loeschen'> & { lesen: (pfad: string) => Promise<Buffer> };
+
+const UEBERNEHMEN_STANDARD: BildUebernehmenDeps = { speichern: storeReceiptImage, loeschen: loescheBilder, lesen: leseBild };
+const NUR_BESTAETIGT: VergleichFehler = { ok: false, status: 409, meldung: 'Das Bild lässt sich nur auf einen bestätigten Bon übernehmen.' };
+
+/** Bricht die Transaktion ab und traegt das Ergebnis heraus. */
+class Abbruch extends Error {
+	constructor(readonly ergebnis: VergleichFehler) {
+		super(ergebnis.meldung);
+	}
+}
+
+/**
+ * „Nur das Bild uebernehmen" (Entwurf 2026-11-06-doppel-vergleich): das neue Foto der Quelle
+ * ersetzt das Bild eines BESTAETIGTEN Ziels; dessen Daten, Positionen, Kategorien und Budgets
+ * bleiben, gelesen wird nicht neu. Die Quelle geht in den Papierkorb.
+ *
+ * Das Ziel bekommt EIGENE Dateien (neu gespeichert, nicht die Pfade der Quelle) — sonst loeschte
+ * das Leeren des Papierkorbs spaeter sein Bild mit. Das bisherige Bild bleibt wie bei „Bild
+ * bearbeiten" als Original stehen; nur die Zwischenfassung einer frueheren Bearbeitung geht.
+ *
+ * Die OCR-Zeilen des juengsten Leselaufs der Quelle werden ein neuer Lauf des Ziels (der
+ * juengste Lauf liefert der Pruefansicht die Rahmen), und die Positionen werden diesen Zeilen
+ * neu zugeordnet — nur `ocr_zeile`, sonst nichts. Ohne Lauf der Quelle: ein Lauf ohne Zeilen,
+ * damit keine Rahmen des alten Bilds auf dem neuen stehen.
+ *
+ * Dateien werden vor der Transaktion geschrieben; trifft das UPDATE nichts (ein anderer Tab war
+ * schneller) oder scheitert etwas darin, gehen sie wieder weg.
+ */
+export async function bildUebernehmen(
+	d: Verbindung,
+	k: Zugriffskontext,
+	zielId: string,
+	quelleId: string,
+	deps: BildUebernehmenDeps = UEBERNEHMEN_STANDARD,
+	erwartet?: Erwartet
+): Promise<{ ok: true } | VergleichFehler> {
+	const geladen = await vergleichLaden(d, k, zielId, quelleId);
+	if (!geladen.ok) return geladen;
+	const { a: ziel, b: quelle } = geladen;
+	const fehler = passtErwartung(erwartet, ziel, quelle) ?? pruefePaar(ziel, quelle);
+	if (fehler) return fehler;
+	if (!darfBonVerwerfen(k, ziel.uploadedBy) || !darfBonVerwerfen(k, quelle.uploadedBy)) return NICHT_BERECHTIGT;
+	if (ziel.status !== 'confirmed') return NUR_BESTAETIGT;
+
+	let neu: Awaited<ReturnType<BildDeps['speichern']>>;
+	try {
+		neu = await deps.speichern(await deps.lesen(quelle.imagePath), new Date());
+	} catch (err) {
+		throw new BildSpeicherFehler(istSystemfehler(err));
+	}
+	const erstesMal = ziel.originalImagePath === null;
+	try {
+		await d.transaction(async (tx) => {
+			const getroffen = await tx
+				.update(receipts)
+				.set({
+					imagePath: neu.imagePath,
+					thumbPath: neu.thumbPath,
+					originalImagePath: erstesMal ? ziel.imagePath : ziel.originalImagePath,
+					originalThumbPath: erstesMal ? ziel.thumbPath : ziel.originalThumbPath
+				})
+				.where(and(eq(receipts.id, ziel.id), eq(receipts.status, 'confirmed'), eq(receipts.imagePath, ziel.imagePath)))
+				.returning({ id: receipts.id });
+			if (getroffen.length !== 1) throw new Abbruch(GEAENDERT);
+
+			const [lauf] = await tx
+				.select({
+					ocrZeilen: extractionRuns.ocrZeilen,
+					ocrText: extractionRuns.ocrText,
+					ocrEngine: extractionRuns.ocrEngine,
+					ocrEngineVersion: extractionRuns.ocrEngineVersion
+				})
+				.from(extractionRuns)
+				.where(eq(extractionRuns.receiptId, quelle.id))
+				.orderBy(desc(extractionRuns.createdAt))
+				.limit(1);
+			const zeilen = lauf?.ocrZeilen ?? null;
+			await tx.insert(extractionRuns).values({
+				receiptId: ziel.id,
+				provider: 'bild-uebernommen',
+				model: 'bild-uebernommen',
+				kiRolle: null,
+				ocrZeilen: zeilen,
+				ocrText: lauf?.ocrText ?? null,
+				ocrEngine: lauf?.ocrEngine ?? null,
+				ocrEngineVersion: lauf?.ocrEngineVersion ?? null
+			});
+
+			const positionen = await tx
+				.select({ id: receiptItems.id, lineNo: receiptItems.lineNo, rawText: receiptItems.rawText, totalPriceCents: receiptItems.totalPriceCents })
+				.from(receiptItems)
+				.where(eq(receiptItems.receiptId, ziel.id));
+			const zuordnung = zeilen ? ordneZeilenZu(positionen, zeilen) : null;
+			for (const p of positionen) {
+				await tx
+					.update(receiptItems)
+					.set({ ocrZeile: zuordnung?.get(p.lineNo) ?? null })
+					.where(eq(receiptItems.id, p.id));
+			}
+
+			const r = await inPapierkorbLegen(tx as never, k, quelle.id, true);
+			if (!r.ok) throw new Abbruch({ ok: false, status: r.status, meldung: r.meldung });
+		});
+	} catch (err) {
+		// Zurueckgerollt: auf die neuen Dateien zeigt nichts (Sammelfassung 4.1).
+		await deps.loeschen([neu.imagePath, neu.thumbPath]);
+		if (err instanceof Abbruch) return err.ergebnis;
+		throw err;
+	}
+	if (!erstesMal) await deps.loeschen([ziel.imagePath, ziel.thumbPath]);
 	return { ok: true };
 }

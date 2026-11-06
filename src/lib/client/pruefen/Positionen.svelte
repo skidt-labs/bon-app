@@ -4,6 +4,7 @@
 	import Betragsfeld from './Betragsfeld.svelte';
 	import { ART_TEXT, MONETAER, ZEILENARTEN, type EditorZeile } from './editor';
 	import { rechenprobe } from './rechenprobe';
+	import { IMMER_NEGATIV, mitVorzeichen } from '$lib/bons/zeilenarten';
 	import type { OcrZeileKurz } from '$lib/server/ocr/anbieter';
 
 	let {
@@ -67,6 +68,13 @@
 	function leerIstNull(i: number, feld: 'quantity' | 'unit') {
 		if (zeilen[i][feld]?.trim() === '') zeilen[i][feld] = null;
 	}
+
+	/** Wird eine Zeile zu Rabatt oder Pfandrueckgabe, kippt ein positiver Betrag ins Minus. */
+	function vorzeichenAnpassen(i: number) {
+		const z = zeilen[i];
+		z.totalPriceCents = mitVorzeichen(z.lineType, z.totalPriceCents);
+		if (z.unitPriceCents !== null) z.unitPriceCents = mitVorzeichen(z.lineType, z.unitPriceCents);
+	}
 </script>
 
 <!-- `overflow-clip`, nicht `overflow-hidden`: beide schneiden die runden Ecken, aber
@@ -102,6 +110,7 @@
 				<span class="w-6 shrink-0 text-right text-[12px] text-leise tabular-nums">{zeile.lineNo}</span>
 				<select
 					bind:value={zeile.lineType}
+					onchange={() => vorzeichenAnpassen(i)}
 					class="shrink-0 rounded-lg border border-linie bg-papier px-1.5 py-1 text-[12px] font-bold"
 					aria-label="Art der Zeile {zeile.lineNo}"
 				>
@@ -115,6 +124,7 @@
 				/>
 				<Betragsfeld
 					bind:cents={zeilen[i].totalPriceCents}
+					negativ={IMMER_NEGATIV.includes(zeile.lineType)}
 					onungueltig={(u) => (kaputt[`${k}:gesamt`] = u)}
 					ariaLabel="Gesamtbetrag der Zeile {zeile.lineNo}"
 					class="w-24 shrink-0 px-2 py-1 text-[13px] font-bold"
@@ -140,6 +150,7 @@
 				<span aria-hidden="true">×</span>
 				<Betragsfeld
 					bind:cents={zeilen[i].unitPriceCents}
+					negativ={IMMER_NEGATIV.includes(zeile.lineType)}
 					onungueltig={(u) => (kaputt[`${k}:einzel`] = u)}
 					leerErlaubt
 					ariaLabel="Einzelpreis der Zeile {zeile.lineNo}"
@@ -229,7 +240,7 @@
 					<button
 						type="button"
 						class="rounded-md bg-tuerkis px-2 py-0.5 font-extrabold text-white"
-						onclick={() => onuebernehmen(i, imBild)}
+						onclick={() => onuebernehmen(i, mitVorzeichen(zeile.lineType, imBild))}
 					>
 						{formatCents(imBild)} übernehmen
 					</button>

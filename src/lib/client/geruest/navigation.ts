@@ -9,6 +9,7 @@ export type SeitenId = 'start' | 'scannen' | 'posteingang' | 'bons' | 'berichte'
 export type SymbolName =
 	| 'haus'
 	| 'kamera'
+	| 'datei'
 	| 'ablage'
 	| 'beleg'
 	| 'balken'
@@ -28,12 +29,21 @@ export const SEITEN: readonly { id: SeitenId; weg: string; titel: string; symbol
 ];
 
 /**
- * Die Ziele der Leiste unten. Scannen bleibt der erhoehte Kamera-Knopf — nicht mehr
- * genau in der Mitte, seit „Start" dazukam, aber weiter das auffaelligste Element.
- * Am Handy ist die Kamera das Wichtigste (Entscheidung des Betreibers, 17.09.2026),
- * deshalb behaelt sie ihre Groesse.
+ * Die Plaetze der Leiste unten. Seit 0.12.0 stehen an der Stelle des einen
+ * Scannen-Knopfs zwei erhoehte Knoepfe: **Kamera** oeffnet direkt die Kamera,
+ * **Datei** direkt die Auswahl (mehrere Fotos) — ein Klick statt zwei (Wunsch der
+ * Nutzerin, 06.11.2026). Beide sind keine Seiten, sondern Dateieingaben, die danach
+ * nach /scan ins Zuschneiden fuehren. Am Rechner bleibt „Scannen" (Symbolleiste).
+ * Die Kamera bleibt das auffaelligste Element (Entscheidung des Betreibers, 17.09.2026).
  */
-export const HANDY_ZIELE: readonly SeitenId[] = ['start', 'posteingang', 'scannen', 'berichte'];
+export type LeistenPlatz = 'start' | 'posteingang' | 'kamera' | 'datei' | 'berichte';
+export const HANDY_ZIELE: readonly LeistenPlatz[] = [
+	'start',
+	'posteingang',
+	'kamera',
+	'datei',
+	'berichte'
+];
 
 const BON_ID = /^\/receipts\/[0-9a-f-]{8,}/i;
 

@@ -41,7 +41,7 @@ describe('leisteUntenSichtbar', () => {
 });
 
 describe('SEITEN', () => {
-	it('sind sechs, und die vier Handy-Ziele sind darunter', () => {
+	it('sind sechs', () => {
 		expect(SEITEN.map((s) => s.id)).toEqual([
 			'start',
 			'scannen',
@@ -50,15 +50,24 @@ describe('SEITEN', () => {
 			'berichte',
 			'einstellungen'
 		]);
-		for (const z of HANDY_ZIELE) expect(SEITEN.some((s) => s.id === z)).toBe(true);
-		// Scannen bleibt am Handy dabei — dort sitzt der erhoehte Kamera-Knopf, und die
-		// Kamera ist am Handy das Wichtigste (Entscheidung des Betreibers, 17.09.2026).
-		expect(HANDY_ZIELE).toContain('scannen');
+	});
+});
+
+describe('HANDY_ZIELE', () => {
+	// Seit 0.12.0 ersetzen am Handy zwei Knoepfe den einen Scannen-Knopf: Kamera oeffnet
+	// direkt die Kamera, Datei direkt die Auswahl (Wunsch der Nutzerin am 06.11.2026:
+	// „Jetzt muss ich jedes Mal zwei mal klicken.“). Am Rechner bleibt „Scannen“.
+	it('sind Start · Posteingang · Kamera · Datei · Berichte', () => {
+		expect(HANDY_ZIELE).toEqual(['start', 'posteingang', 'kamera', 'datei', 'berichte']);
+		for (const z of HANDY_ZIELE) {
+			if (z === 'kamera' || z === 'datei') continue;
+			expect(SEITEN.some((s) => s.id === z)).toBe(true);
+		}
 	});
 
 	// Die Leiste unten ist ein Raster mit fester Spaltenzahl (LeisteUnten.svelte). Kommt
 	// ein Ziel dazu, ohne dass das Raster mitwaechst, rutschen die Knoepfe uebereinander.
-	it('hat genau so viele Handy-Ziele, wie das Raster Spalten hat', () => {
-		expect(HANDY_ZIELE).toHaveLength(4);
+	it('hat genau so viele Handy-Ziele, wie das Raster Spalten hat (grid-cols-5)', () => {
+		expect(HANDY_ZIELE).toHaveLength(5);
 	});
 });

@@ -2,7 +2,9 @@
 	import BildBearbeiten from '$lib/client/bild/BildBearbeiten.svelte';
 	import { enqueueUpload, flushOutbox, pendingCount, describeFlush, autoSyncMessage } from '$lib/client/outbox';
 	import { onMount } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import Seite from '$lib/client/geruest/Seite.svelte';
+	import { abholen } from './uebergabe';
 
 	// Nutzer und Haushalt kommen aus dem Layout — diese Komponente zeigen zwei Adressen
 	// (/scan und, am Handy, die Eingangstuer /), deshalb als Eigenschaft statt aus einem
@@ -90,16 +92,29 @@
 		}
 	}
 
-	async function pick(event: Event, from: 'camera' | 'upload') {
-		const input = event.target as HTMLInputElement;
-		const files = Array.from(input.files ?? []);
+	async function start(files: File[], from: 'camera' | 'upload') {
 		if (files.length === 0) return;
 		source = from;
 		pending = files.slice(1);
 		message = '';
 		await loadForCrop(files[0]);
+	}
+
+	async function pick(event: Event, from: 'camera' | 'upload') {
+		const input = event.target as HTMLInputElement;
+		const files = Array.from(input.files ?? []);
+		if (files.length === 0) return;
+		await start(files, from);
 		input.value = ''; // sonst feuert die Auswahl derselben Datei kein change-Event
 	}
+
+	// Fotos aus den Knoepfen Kamera/Datei der Leiste unten (uebergabe.ts). afterNavigate
+	// statt onMount: steht man schon auf /scan, baut goto('/scan') die Seite nicht neu
+	// auf — afterNavigate laeuft trotzdem, beim ersten Aufbau wie bei jeder Navigation.
+	afterNavigate(() => {
+		const bereit = abholen();
+		if (bereit) void start(bereit.dateien, bereit.quelle);
+	});
 
 	/** Der fertige, entzerrte Bon kommt aus BildBearbeiten. */
 	async function upload(blob: Blob) {
